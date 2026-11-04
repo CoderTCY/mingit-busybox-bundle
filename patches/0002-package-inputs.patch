@@ -1,0 +1,77 @@
+From: MinGit BusyBox Bundle maintainers
+Subject: [PATCH] Bind the official split-package recipe to bundle inputs
+
+Based on git-for-windows/MINGW-packages
+20a412e3b61c853fb3a290f02e78f59611d20342, maintained by
+Johannes Schindelin <johannes.schindelin@gmx.de>.
+Bundle integration changes: GPL-2.0-only.
+Preserve upstream resource checksums and all split-package build targets.
+Only the independently verified VCS commit uses SKIP.
+---
+
+diff --git a/mingw-w64-git/PKGBUILD b/mingw-w64-git/PKGBUILD
+index ce106f0..535991e 100644
+--- a/mingw-w64-git/PKGBUILD
++++ b/mingw-w64-git/PKGBUILD
+@@ -17,7 +17,9 @@ pkgname=("${MINGW_PACKAGE_PREFIX}-${_realname}"
+ 	 "${MINGW_PACKAGE_PREFIX}-gitk"
+ 	 "${MINGW_PACKAGE_PREFIX}-${_realname}-gui"
+ 	 "${MINGW_PACKAGE_PREFIX}-${_realname}-for-windows-addons")
+-tag=2.56.0.windows.4
++# Supplied by the immutable bundle input snapshot, not a moving tag.
++tag=${BUNDLE_GIT_TAG:?missing pinned Git tag}
++tag=${tag#v}
+ pkgver=${tag/.windows./.}
+ pkgrel=1
+ pkgdesc="The fast distributed version control system (mingw-w64)"
+@@ -40,7 +42,7 @@ makedepends=('git' 'openssh' 'ca-certificates' 'xmlto' 'docbook-xsl' 'docbook-xs
+ 	"${MINGW_PACKAGE_PREFIX}-pcre2"
+ 	"${MINGW_PACKAGE_PREFIX}-asciidoctor")
+ 
+-source=("${_realname}"::"git+https://github.com/git-for-windows/git.git#tag=v$tag"
++source=("${_realname}"::"git+https://github.com/git-for-windows/git.git#commit=${BUNDLE_GIT_COMMIT:?missing Git commit}"
+ 	'git-for-windows.ico'
+ 	'start-ssh-agent.cmd'
+ 	'start-ssh-pageant.cmd'
+@@ -54,7 +56,8 @@ source=("${_realname}"::"git+https://github.com/git-for-windows/git.git#tag=v$ta
+ 	'tig.rc'
+ 	'mingw-w64-git.mak'
+ 	'cv2pdb-strip'
+-	'edit-git-bash.c')
++	'edit-git-bash.c'
++	'0001-core-shell.patch')
+ 
+ # Need to disable autoCRLF to ensure a stable checksum; `git archive` (which
+ # is used by `calc_checksum_git()` in `/usr/share/makepkg/source/git.sh`) would
+@@ -62,7 +65,8 @@ source=("${_realname}"::"git+https://github.com/git-for-windows/git.git#tag=v$ta
+ # resulting in different sha256sums.
+ export GIT_CONFIG_PARAMETERS="${GIT_CONFIG_PARAMETERS:+$GIT_CONFIG_PARAMETERS }'core.autocrlf=false' 'core.eol=lf'"
+ 
+-sha256sums=('f694b18d3ac535e8ec58af7aa07363cfe1bcd958453e47a5dacb19acb35ab717'
++# prepare() independently verifies the pinned VCS commit before applying changes.
++sha256sums=('SKIP'
+             'a9dcba5aebc93ae7aacdee03275780fc6c0f15e88fda30c93041e75851e75090'
+             '7e6c5f3dc6a4209dca0e1f38880b2978500a5c745c04bc60dbeda5fc48e8d3cb'
+             '80b0b11efe5a2f9b4cd92f28c260d0b3aad8b809c34ed95237c59b73e08ade0b'
+@@ -76,7 +80,8 @@ sha256sums=('f694b18d3ac535e8ec58af7aa07363cfe1bcd958453e47a5dacb19acb35ab717'
+             '027155aa6ca5f11ad7bcb89550a470935a9f22a9d5b3ab80a9eb209983258c1f'
+             '98efa20e7daff3153086610edc6d7f58bd5304b2ca62cd5c196896a1ff90e2be'
+             '7413506c59d25621e475aa45447993748332c72cfbb4cf94cce6bee6f1218a09'
+-            '6d83e1cb1acdb6eb1f2d5cb9299298e57680f5ca43d43c3e67c9da17f21b9b01')
++            '6d83e1cb1acdb6eb1f2d5cb9299298e57680f5ca43d43c3e67c9da17f21b9b01'
++            "${BUNDLE_CORE_PATCH_SHA256:?missing patch checksum}")
+ 
+ COMPAT_CFLAGS=
+ STRIP=
+@@ -146,6 +151,11 @@ _DEFAULT_EDITOR="${_DEFAULT_EDITOR:-nano}"
+ 
+ prepare () {
+   cd "$srcdir/git" &&
++  test "$(git rev-parse HEAD)" = "${BUNDLE_GIT_COMMIT:?}" || return 1
++  git apply --check ../0001-core-shell.patch || return 1
++  git apply ../0001-core-shell.patch || return 1
++  printf '%s.busyboxbundle.%s\n' "$tag" "${BUNDLE_RECIPE_COMMIT:0:12}" >version
++
+ 
+   cat >config.mak <<-EOF
+ 	CC = $CC

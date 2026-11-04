@@ -1,0 +1,145 @@
+From: Johannes Schindelin <johannes.schindelin@gmx.de>
+Subject: [PATCH] Allow overriding the POSIX shell with core.shell
+
+Port of Git for Windows PR #3301, production changes only:
+https://github.com/git-for-windows/git/pull/3301
+5907f977c89ac328533b4950ab5fdb66d9e704fe
+28f4250189a24d748494aab76feb1aac4000b221
+Rebased context onto v2.56.0.windows.4; semantics unchanged.
+License: GPL-2.0-only, as the upstream Git source.
+The upstream mock-shell diagnostic tests are intentionally not carried;
+the bundle exercises real BusyBox shells, transports and hooks instead.
+
+Signed-off-by: Johannes Schindelin <johannes.schindelin@gmx.de>
+---
+
+diff --git a/Documentation/config/core.adoc b/Documentation/config/core.adoc
+index 4d40c16..2534291 100644
+--- a/Documentation/config/core.adoc
++++ b/Documentation/config/core.adoc
+@@ -815,3 +815,7 @@ core.WSLCompat::
+ 	The default value is false. When set to true, Git will set the mode
+ 	bits of the file in the way of wsl, so that the executable flag of
+ 	files can be set or read correctly.
++
++core.shell::
++	Set the absolute path to the executable to use as a POSIX shell;
++	This will also set/override the environment variable `SHELL`.
+diff --git a/compat/mingw.c b/compat/mingw.c
+index 9c5a514..377536e 100644
+--- a/compat/mingw.c
++++ b/compat/mingw.c
+@@ -2005,6 +2005,10 @@ static char *path_lookup(const char *cmd, int exe_only)
+ 	if (strpbrk(cmd, "/\\"))
+ 		return xstrdup(cmd);
+ 
++	if (!strcmp(cmd, "sh") &&
++	    (prog = xstrdup_or_null(get_shell_path(NULL))))
++		return prog;
++
+ 	path = mingw_getenv("PATH");
+ 	if (!path)
+ 		return NULL;
+@@ -2198,6 +2202,12 @@ static int is_msys2_sh(const char *cmd)
+ 		if (ret >= 0)
+ 			return ret;
+ 
++		if (get_shell_path(NULL)) {
++			/* Assume an overridden shell is not MSYS2 */
++			ret = 0;
++			return ret;
++		}
++
+ 		p = path_lookup(cmd, 0);
+ 		if (!p)
+ 			ret = 0;
+diff --git a/help.c b/help.c
+index 4624149..1085b1e 100644
+--- a/help.c
++++ b/help.c
+@@ -793,7 +793,7 @@ void get_version_info(struct strbuf *buf, int show_build_options)
+ 			strbuf_addstr(buf, "no commit associated with this build\n");
+ 		strbuf_addf(buf, "sizeof-long: %d\n", (int)sizeof(long));
+ 		strbuf_addf(buf, "sizeof-size_t: %d\n", (int)sizeof(size_t));
+-		strbuf_addf(buf, "shell-path: %s\n", SHELL_PATH);
++		strbuf_addf(buf, "shell-path: %s\n", get_shell_path(SHELL_PATH));
+ 		/* NEEDSWORK: also save and output GIT-BUILD_OPTIONS? */
+ 
+ #if defined WITH_RUST
+diff --git a/run-command.c b/run-command.c
+index 27c31af..17accf1 100644
+--- a/run-command.c
++++ b/run-command.c
+@@ -1,4 +1,5 @@
+ #define DISABLE_SIGN_COMPARE_WARNINGS
++#define USE_THE_REPOSITORY_VARIABLE
+ 
+ #include "git-compat-util.h"
+ #include "run-command.h"
+@@ -18,6 +19,20 @@
+ #include "packfile.h"
+ #include "compat/nonblock.h"
+ 
++const char *get_shell_path(const char *fallback)
++{
++	static char *shell;
++	static int initialized;
++
++	if (!initialized) {
++		if (!repo_config_get_pathname(the_repository, "core.shell", &shell))
++			setenv("SHELL", shell, 1);
++		initialized = 1;
++	}
++
++	return shell ? shell : fallback;
++}
++
+ void child_process_init(struct child_process *child)
+ {
+ 	struct child_process blank = CHILD_PROCESS_INIT;
+@@ -276,12 +291,19 @@ int sane_execvp(const char *file, char * const argv[])
+ 
+ char *git_shell_path(void)
+ {
++	const char *shell = get_shell_path(NULL);
++
++	if (shell)
++		return xstrdup(shell);
++
+ #ifndef GIT_WINDOWS_NATIVE
+ 	return xstrdup(SHELL_PATH);
+ #else
+-	char *p = locate_in_PATH("sh");
+-	convert_slashes(p);
+-	return p;
++	{
++		char *p = locate_in_PATH("sh");
++		convert_slashes(p);
++		return p;
++	}
+ #endif
+ }
+ 
+@@ -416,7 +438,7 @@ static int prepare_cmd(struct strvec *out, const struct child_process *cmd)
+ 	 * Add SHELL_PATH so in the event exec fails with ENOEXEC we can
+ 	 * attempt to interpret the command with 'sh'.
+ 	 */
+-	strvec_push(out, SHELL_PATH);
++	strvec_push(out, get_shell_path(SHELL_PATH));
+ 
+ 	if (cmd->git_cmd) {
+ 		prepare_git_cmd(out, cmd->args.v);
+diff --git a/run-command.h b/run-command.h
+index 331c939..230c5a6 100644
+--- a/run-command.h
++++ b/run-command.h
+@@ -622,4 +622,9 @@ enum start_bg_result start_bg_command(struct child_process *cmd,
+ 
+ int sane_execvp(const char *file, char *const argv[]);
+ 
++/*
++ * Get the path of the POSIX shell to use in `start_command()`.
++ */
++const char *get_shell_path(const char *fallback);
++
+ #endif
