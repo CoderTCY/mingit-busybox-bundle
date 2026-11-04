@@ -13,7 +13,10 @@ function Get-BundleApi {
     $headers = @{ Accept = 'application/vnd.github+json'; 'User-Agent' = 'MinGit-BusyBox-Bundle'; 'X-GitHub-Api-Version' = '2022-11-28' }
     $token = if ($env:GH_TOKEN) { $env:GH_TOKEN } else { $env:GITHUB_TOKEN }
     if ($token) { $headers.Authorization = "Bearer $token" }
-    try { Invoke-RestMethod -Uri "https://api.github.com/$Path" -Headers $headers }
+    try {
+        $response = Invoke-RestMethod -Uri "https://api.github.com/$Path" -Headers $headers
+        return $response
+    }
     catch { throw "GitHub API $Path failed: $($_.Exception.Message)" }
 }
 
