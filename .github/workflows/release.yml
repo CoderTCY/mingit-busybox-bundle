@@ -1,0 +1,247 @@
+name: MinGit BusyBox Bundle
+
+on:
+  schedule:
+    - cron: '23 3 * * *'
+  workflow_dispatch:
+    inputs:
+      git_tag:
+        description: 'Stable Git for Windows tag (empty resolves latest once)'
+        required: false
+        type: string
+      lfs_tag:
+        description: 'Stable Git LFS tag (empty resolves latest once)'
+        required: false
+        type: string
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-pipeline
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: pwsh
+
+env:
+  GH_PROMPT_DISABLED: '1'
+  GIT_TERMINAL_PROMPT: '0'
+
+jobs:
+  resolve:
+    runs-on: windows-2022
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      release_tag: ${{ steps.resolve.outputs.release_tag }}
+      should_build: ${{ steps.resolve.outputs.should_build }}
+    steps:
+      - name: Check out the exact recipe without retained credentials
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Resolve or restore this run's immutable input snapshot
+        id: resolve
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REQUEST_GIT_TAG: ${{ inputs.git_tag }}
+          REQUEST_LFS_TAG: ${{ inputs.lfs_tag }}
+        run: |
+          ./scripts/resolve-run.ps1 -Repository $env:GITHUB_REPOSITORY -GitTag $env:REQUEST_GIT_TAG -LfsTag $env:REQUEST_LFS_TAG -OutputPath build/inputs.json
+      - name: Save the original snapshot even when release lookup fails
+        if: ${{ always() && steps.resolve.outputs.new_snapshot == 'true' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: inputs-${{ github.run_id }}
+          path: build/inputs.json
+          if-no-files-found: error
+          retention-days: 90
+          overwrite: false
+
+  build:
+    needs: resolve
+    if: ${{ needs.resolve.outputs.should_build == 'true' }}
+    runs-on: windows-2022
+    timeout-minutes: 360
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: inputs-${{ github.run_id }}
+          path: build
+      - name: Validate PowerShell syntax on the remote runner
+        run: |
+          $errors = @()
+          Get-ChildItem scripts,tests -Filter '*.ps1' -File | ForEach-Object {
+            $tokens = $null
+            $parseErrors = $null
+            [Management.Automation.Language.Parser]::ParseFile($_.FullName, [ref]$tokens, [ref]$parseErrors) | Out-Null
+            foreach ($parseError in $parseErrors) {
+              $errors += "$($_.Name):$($parseError.Extent.StartLineNumber): $($parseError.Message)"
+            }
+          }
+          if ($errors.Count) { throw ($errors -join "`n") }
+      - name: Install the pinned x64 UCRT64 build SDK
+        id: sdk
+        uses: git-for-windows/setup-git-for-windows-sdk@cd1e73e1d50842848a6bacf9ab671e6c4237b097
+        with:
+          flavor: build-installers
+          architecture: x86_64
+          cache: false
+      - name: Build the integrated offline installer, upgrade fixture and source archive
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SDK_ROOT: ${{ steps.sdk.outputs.result }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Path build/test-results -Force | Out-Null
+          Start-Transcript -Path build/test-results/build-transcript.log
+          try {
+            ./scripts/build.ps1 -InputsPath build/inputs.json -SdkRoot $env:SDK_ROOT -OutputRoot build
+          } finally {
+            Stop-Transcript
+          }
+      # In particular, source-collection failure must not discard the already
+      # compiled EXE. Failure still blocks verify/publish through job dependencies.
+      - name: Preserve all available public candidates
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: bundle-dist
+          path: dist/*
+          if-no-files-found: warn
+          compression-level: 0
+          retention-days: 90
+          overwrite: true
+      - name: Preserve the private older-LFS fixture separately
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: upgrade-fixture
+          path: build/work/fixtures/*.exe
+          if-no-files-found: warn
+          compression-level: 0
+          retention-days: 30
+          overwrite: true
+      - name: Preserve build and source-collection diagnostics
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: build-diagnostics
+          path: |
+            build/test-results/
+            build/work/sdk-packages.txt
+            build/work/compiler.txt
+            build/work/source-locales.txt
+            build/work/git-source-commit.txt
+          if-no-files-found: warn
+          retention-days: 30
+          overwrite: true
+
+  verify:
+    needs: [resolve, build]
+    if: ${{ needs.resolve.outputs.should_build == 'true' }}
+    runs-on: windows-2022
+    timeout-minutes: 120
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        scope: [CurrentUser, AllUsers]
+    steps:
+      # A new runner per scope: no SDK action, package installation or build cache.
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: inputs-${{ github.run_id }}
+          path: build
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: bundle-dist
+          path: dist
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: upgrade-fixture
+          path: build/work/fixtures
+      - name: Exercise the real offline installer in the selected security scope
+        env:
+          VERIFY_SCOPE: ${{ matrix.scope }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          . ./scripts/release-state.ps1
+          $inputs = Get-Content -LiteralPath build/inputs.json -Raw | ConvertFrom-Json
+          Assert-BundleInputs $inputs $env:GITHUB_WORKSPACE
+          $names = @(Get-BundleReleaseFileNames $inputs)
+          Assert-BundleSameInputs $inputs (Get-Content -LiteralPath dist/inputs.json -Raw | ConvertFrom-Json)
+          Assert-BundleSameInputs $inputs (Get-Content -LiteralPath dist/build-manifest.json -Raw | ConvertFrom-Json).inputs
+          $installers = @(Get-ChildItem -LiteralPath dist -Filter '*.exe' -File)
+          if ($installers.Count -ne 1 -or $installers[0].Name -cne $names[0]) { throw 'Expected exactly the identity-bound main EXE' }
+          $fixtures = @(Get-ChildItem -LiteralPath build/work/fixtures -Filter '*.exe' -File)
+          if ($fixtures.Count -ne 1) { throw 'Expected one private older-LFS installer fixture' }
+          $scratch = Join-Path $env:RUNNER_TEMP ('bundle-verify-' + $env:VERIFY_SCOPE)
+          ./tests/invoke-verify.ps1 -Installer $installers[0].FullName -UpgradeInstaller $fixtures[0].FullName -InputsPath (Join-Path $env:GITHUB_WORKSPACE 'build/inputs.json') -Scope $env:VERIFY_SCOPE -ScratchRoot $scratch
+      - name: Preserve complete lifecycle, browser screenshots and command evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: verify-${{ matrix.scope }}
+          path: ${{ runner.temp }}/bundle-verify-${{ matrix.scope }}/
+          if-no-files-found: warn
+          include-hidden-files: true
+          compression-level: 0
+          retention-days: 90
+          overwrite: true
+
+  publish:
+    needs: [resolve, build, verify]
+    if: >-
+      ${{ needs.resolve.outputs.should_build == 'true' &&
+          needs.build.result == 'success' && needs.verify.result == 'success' &&
+          (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') &&
+          github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
+    runs-on: windows-2022
+    timeout-minutes: 90
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: inputs-${{ github.run_id }}
+          path: build
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: bundle-dist
+          path: dist
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: verify-CurrentUser
+          path: build/test-results/evidence/CurrentUser
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: verify-AllUsers
+          path: build/test-results/evidence/AllUsers
+      - name: Publish only identity-bound, fully verified draft assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ./scripts/publish.ps1 -InputsPath build/inputs.json -ArtifactsDir dist -EvidenceRoot build/test-results/evidence -Repository $env:GITHUB_REPOSITORY
