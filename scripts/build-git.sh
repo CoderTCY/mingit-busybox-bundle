@@ -63,12 +63,22 @@ fi
 if [[ ! -f /usr/bin/msys-curl-4.dll ]]; then
     pacman -S --noconfirm libcurl
 fi
+if [[ ! -f /usr/bin/msys-nghttp2-14.dll || ! -f /usr/bin/msys-ssh2-1.dll ]]; then
+    pacman -S --noconfirm libnghttp2 libssh2
+fi
 if [[ ! -f /ucrt64/bin/libsqlite3-0.dll ]]; then
     pacman -S --noconfirm mingw-w64-ucrt-x86_64-sqlite3
+fi
+if [[ ! -x /ucrt64/bin/x86_64-w64-mingw32-gcc.exe ]]; then
+    pacman -S --noconfirm mingw-w64-ucrt-x86_64-gcc
+fi
+if [[ ! -f /ucrt64/lib/libdbghelp.a ]]; then
+    pacman -S --noconfirm mingw-w64-ucrt-x86_64-crt
 fi
 pacman -S --needed --noconfirm mingw-w64-ucrt-x86_64-rust
 cargo --version
 rustc --version
+x86_64-w64-mingw32-gcc --version
 /usr/bin/git --version
 cd "$recipe"
 export PKGDEST="$output/work/packages" SRCPKGDEST="$output/work/sources"
