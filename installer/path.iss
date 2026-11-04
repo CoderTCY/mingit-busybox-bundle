@@ -1,5 +1,5 @@
-; Included by setup.iss inside [Code]. Only the selected registry scope is edited.
-; Never reconstruct a persisted PATH from the installer's process environment.
+// Included by setup.iss inside [Code]. Only the selected registry scope is edited.
+// Never reconstruct a persisted PATH from the installer's process environment.
 function ScopeRoot: HKEY;
 begin
   if IsUninstaller then Result := UninstallScopeRoot

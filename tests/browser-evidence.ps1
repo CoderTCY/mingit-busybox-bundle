@@ -118,10 +118,9 @@ JSON.stringify({url:location.href,title:document.title,text:document.body.innerT
     Assert-Acceptance (@($page.images | Where-Object { -not $_.loaded }).Count -eq 0) 'Manual contains failed image loads.'
     Assert-Acceptance (@($page.styles | Where-Object { $_.href -and $_.href -notlike 'file:*' }).Count -eq 0) 'Manual loaded a nonlocal stylesheet.'
     Assert-Acceptance (@($page.resources | Where-Object { $_ -match '^https?://' }).Count -eq 0) 'Offline manual attempted to load an HTTP(S) resource.'
-    $capture = Invoke-BrowserProtocol $target.webSocketDebuggerUrl 'Page.captureScreenshot' @{ format = 'png'; captureBeyondViewport = $false }
     [IO.Directory]::CreateDirectory($OutputRoot) | Out-Null
     $screenshot = Join-Path $OutputRoot "$Name.png"
-    [IO.File]::WriteAllBytes($screenshot, [Convert]::FromBase64String($capture.data))
+    $null = Invoke-AcceptanceProcess -File (Join-Path $env:SystemRoot 'System32/WindowsPowerShell/v1.0/powershell.exe') -Arguments @('-NoProfile', '-File', (Join-Path $PSScriptRoot 'capture-browser-window.ps1'), '-BrowserProcessId', "$($State.Process.Id)", '-ExpectedPath', $LocalPath, '-OutputPath', $screenshot) -Directory $OutputRoot -TimeoutSeconds 60
     Write-Utf8 (Join-Path $OutputRoot "$Name.json") ($page | ConvertTo-Json -Depth 8)
     return @{ Target = $target; Page = $page; Screenshot = $screenshot; Sha256 = Get-Sha256 $screenshot }
 }
