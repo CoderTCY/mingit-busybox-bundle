@@ -1,0 +1,16 @@
+{
+  "sdkActionCommit": "cd1e73e1d50842848a6bacf9ab671e6c4237b097",
+  "buildExtraCommit": "875033658093092540effba4ec58bd64042f56a5",
+  "mingwPackagesCommit": "20a412e3b61c853fb3a290f02e78f59611d20342",
+  "inno": {
+    "version": "7.1.1",
+    "url": "https://github.com/jrsoftware/issrc/releases/download/is-7_1_1/innosetup-7.1.1-x64.exe",
+    "sha256": "8a5a6711c3766a6e5fb74f280ba0e3551e719ce94538d901fdbd1f8f9920b3f0",
+    "publisher": "Pyrsys B.V."
+  },
+  "actions": {
+    "checkout": "11bd71901bbe5b1630ceea73d27597364c9af683",
+    "uploadArtifact": "ea165f8d65b6e75b540449e92b4886f43607fa02",
+    "downloadArtifact": "d3f86a106a0bac45b974a628896c90dbdf5c8093"
+  }
+}
