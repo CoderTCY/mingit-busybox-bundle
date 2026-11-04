@@ -49,3 +49,5 @@ LFS filters 已预设在产品 system config；最后一条仅在用户需要 LF
 工作流每日检测当时的上游最新稳定版，也支持固定 tag 的手动运行。PR 只构建和验证。两个全新 Windows runner 分别验收真正受限账户的 CurrentUser 和管理员 AllUsers 安装、真实旧 LFS 升级、PATH 所有权、卸载保留，以及同一 payload 的 shell alias、本地传输、hooks、重定位、中文/C locale、实际默认浏览器离线帮助和真实 LFS `file:///` 上传/clone 自动 checkout。
 
 LFS 离线 roundtrip 不代表已覆盖 HTTPS、代理、认证或服务器锁 API。源码缺失、UI 无法实际显示或任何行为门禁失败都会阻止正式发布；已编译 EXE 可留在失败工作流的 artifact 中用于诊断，但不能当作通过验收的 Release。每日调度不保证准时，也不保证捕捉已被后续版本替代的每个上游版本；本产品没有驻留客户端自动升级服务。
+
+对应源码按实际 payload 文件所属包及 pacman `%BASE%`/精确版本去重，保留官方 `.src.tar.gz` 或 `.src.tar.zst` 归档、来源 URL、SHA-256、配方、补丁和随包许可证。SDK 的合法空元包没有文件清单；安装后生成的 `etc/gitattributes` 另与该版本 `git-extra` 的生成脚本核对。未随 payload 分发且已被 SDK 裁剪的文档不作为安装文件要求，完整对应源码仍单独收集，缺失即阻断发布。

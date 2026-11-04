@@ -114,10 +114,31 @@ function Read-SourceArchive([string]$Relative, [string]$LicensePrefix) {
     $texts = @{}
     $hashes = @{}
     $licenses = [Collections.Generic.List[string]]::new()
-    $stream = [IO.File]::OpenRead((Join-Path $OutputDirectory $Relative))
-    $gzip = [IO.Compression.GZipStream]::new($stream, [IO.Compression.CompressionMode]::Decompress)
-    $reader = [System.Formats.Tar.TarReader]::new($gzip)
+    $compressed = $null
+    $stream = $null
+    $reader = $null
+    $decoder = $null
+    $decoderStarted = $false
     try {
+        $archivePath = Join-Path $OutputDirectory $Relative
+        if ($Relative.EndsWith('.tar.gz', [StringComparison]::Ordinal)) {
+            $compressed = [IO.File]::OpenRead($archivePath)
+            $stream = [IO.Compression.GZipStream]::new($compressed, [IO.Compression.CompressionMode]::Decompress)
+        } elseif ($Relative.EndsWith('.tar.zst', [StringComparison]::Ordinal)) {
+            $start = [Diagnostics.ProcessStartInfo]::new()
+            $start.FileName = Join-Path $SdkRoot 'usr/bin/zstd.exe'
+            $start.UseShellExecute = $false
+            $start.RedirectStandardOutput = $true
+            $start.RedirectStandardError = $true
+            foreach ($argument in @('--decompress', '--stdout', '--no-progress', '--', $archivePath)) { $start.ArgumentList.Add($argument) }
+            $decoder = [Diagnostics.Process]::new()
+            $decoder.StartInfo = $start
+            $decoderStarted = $decoder.Start()
+            if (-not $decoderStarted) { throw 'Cannot start the SDK zstd decoder' }
+            $decoderError = $decoder.StandardError.ReadToEndAsync()
+            $stream = $decoder.StandardOutput.BaseStream
+        } else { throw "Unsupported official source archive format: $Relative" }
+        $reader = [System.Formats.Tar.TarReader]::new($stream, $true)
         while ($null -ne ($entry = $reader.GetNextEntry())) {
             $name = $entry.Name -replace '^(\./)+', ''
             $name = $name.TrimEnd('/')
@@ -145,8 +166,25 @@ function Read-SourceArchive([string]$Relative, [string]$LicensePrefix) {
                 $licenses.Add($targetRelative)
             }
         }
+        # Consume remaining padding/footer so a decoder cannot block on its pipe
+        # and compressed-stream integrity errors are not hidden by tar's EOF.
+        $stream.CopyTo([IO.Stream]::Null)
+        if ($decoder) {
+            $decoder.WaitForExit()
+            $errorText = $decoderError.GetAwaiter().GetResult()
+            if ($decoder.ExitCode -ne 0) { throw "zstd failed ($($decoder.ExitCode)): $errorText" }
+            if ($errorText) { Write-Host $errorText }
+        }
     }
-    finally { $reader.Dispose(); $gzip.Dispose(); $stream.Dispose() }
+    finally {
+        if ($reader) { $reader.Dispose() }
+        if ($stream) { $stream.Dispose() }
+        if ($compressed) { $compressed.Dispose() }
+        if ($decoder) {
+            if ($decoderStarted -and -not $decoder.HasExited) { $decoder.Kill($true); $decoder.WaitForExit() }
+            $decoder.Dispose()
+        }
+    }
     return @{ names = $names; materialized = $materialized; texts = $texts; hashes = $hashes; licenses = $licenses.ToArray() }
 }
 function Assert-PackageArchive($Archive, [string]$Base, [string]$Version) {
@@ -299,7 +337,7 @@ Export-Commit (Join-Path $BuildRoot 'work/package-recipe/git') $inputs.git.commi
 
 $releaseCache = @{}
 $indexCache = @{}
-function Find-IndexedSource([string[]]$BinaryNames, [string]$Base, [string]$Version, [string]$FileName, [string]$Destination) {
+function Find-IndexedSource([string[]]$BinaryNames, [string]$Base, [string]$Version, [string[]]$FileNames, [string]$DestinationDirectory) {
     foreach ($binary in $BinaryNames) {
         if (-not $indexCache.ContainsKey($binary)) {
             $relative = "metadata/indexes/$binary.versions.json"
@@ -331,18 +369,21 @@ function Find-IndexedSource([string[]]$BinaryNames, [string]$Base, [string]$Vers
                 }
                 $releaseCache[$tag] = $assets.ToArray()
             }
-            $matching = @($releaseCache[$tag] | Where-Object { $_.name -ceq $FileName })
-            if ($matching.Count -gt 1) { throw "Ambiguous source assets for $Base $Version in $tag" }
-            if ($matching.Count -eq 0) { continue }
-            $asset = $matching[0]
-            if ($asset.state -cne 'uploaded') { throw "Source asset is not uploaded: $FileName" }
-            $expected = ''
-            if ($asset.Contains('digest') -and $asset.digest) {
-                if ($asset.digest -notmatch '^sha256:([0-9a-fA-F]{64})$') { throw "Unsupported source asset digest: $FileName" }
-                $expected = $Matches[1]
+            foreach ($fileName in $FileNames) {
+                $matching = @($releaseCache[$tag] | Where-Object { $_.name -ceq $fileName })
+                if ($matching.Count -gt 1) { throw "Ambiguous source assets for $Base $Version in $tag" }
+                if ($matching.Count -eq 0) { continue }
+                $asset = $matching[0]
+                if ($asset.state -cne 'uploaded') { throw "Source asset is not uploaded: $fileName" }
+                $expected = ''
+                if ($asset.Contains('digest') -and $asset.digest) {
+                    if ($asset.digest -notmatch '^sha256:([0-9a-fA-F]{64})$') { throw "Unsupported source asset digest: $fileName" }
+                    $expected = $Matches[1]
+                }
+                $destination = "$DestinationDirectory/$fileName"
+                Receive-Source $asset.browser_download_url $destination $expected | Out-Null
+                return [ordered]@{ method = 'pacman-repo'; binaryIndex = $binary; releaseTag = $tag; assetId = $asset.id; url = $asset.browser_download_url; archive = $destination }
             }
-            Receive-Source $asset.browser_download_url $Destination $expected | Out-Null
-            return [ordered]@{ method = 'pacman-repo'; binaryIndex = $binary; releaseTag = $tag; assetId = $asset.id; url = $asset.browser_download_url }
         }
     }
     return $null
@@ -374,9 +415,12 @@ foreach ($key in ($groups.Keys | Sort-Object)) {
     $group = @($groups[$key] | Sort-Object name)
     $base = $group[0].base; $version = $group[0].version
     # Epoch is part of the identity, but pacman's source filename omits it.
-    $fileName = "$base-$($version -replace '^\d+:', '').src.tar.gz"
+    $stem = "$base-$($version -replace '^\d+:', '').src.tar"
+    $fileNames = @("$stem.gz", "$stem.zst")
+    $fileName = $fileNames[0]
     $segment = [Uri]::EscapeDataString($version)
-    $relative = "packages/$base/$segment/$fileName"
+    $directory = "packages/$base/$segment"
+    $relative = "$directory/$fileName"
     if ($base -ceq 'mingw-w64-git') {
         if ($version -cne "$($inputs.git.packageVersion)-1") { throw "Git package version is not this build: $version" }
         $allsource = @(Get-ChildItem -LiteralPath (Join-Path $BuildRoot 'work/sources') -File | Where-Object Name -CEQ $fileName)
@@ -387,15 +431,24 @@ foreach ($key in ($groups.Keys | Sort-Object)) {
         $customGitCount++
     }
     else {
-        $origin = Find-IndexedSource @($group.name) $base $version $fileName $relative
+        $origin = Find-IndexedSource @($group.name) $base $version $fileNames $directory
         if ($null -eq $origin) {
             $kind = if ($base.StartsWith('mingw-w64-', [StringComparison]::Ordinal)) { 'mingw' } else { 'msys' }
-            $urls = @("https://repo.msys2.org/$kind/sources/$fileName", "https://wingit.blob.core.windows.net/sources/$fileName")
-            foreach ($url in $urls) {
-                if (Receive-Source $url $relative -AllowNotFound) { $origin = [ordered]@{ method = 'exact-version-fallback'; url = $url }; break }
+            $roots = @("https://repo.msys2.org/$kind/sources", 'https://wingit.blob.core.windows.net/sources')
+            foreach ($sourceRoot in $roots) {
+                foreach ($candidate in $fileNames) {
+                    $url = "$sourceRoot/$candidate"
+                    $destination = "$directory/$candidate"
+                    if (Receive-Source $url $destination -AllowNotFound) {
+                        $origin = [ordered]@{ method = 'exact-version-fallback'; url = $url; archive = $destination }
+                        break
+                    }
+                }
+                if ($null -ne $origin) { break }
             }
             if ($null -eq $origin) { throw "No exact corresponding source for $base $version (binary packages: $($group.name -join ', '))" }
         }
+        $relative = $origin.archive
     }
     $archive = Read-SourceArchive $relative "licenses/sources/$base/$segment"
     $root = Assert-PackageArchive $archive $base $version
