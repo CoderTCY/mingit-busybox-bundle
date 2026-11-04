@@ -60,6 +60,16 @@ pacman -Sy --noconfirm
 if [[ ! -x /usr/bin/git.exe || ! -x /usr/bin/pacman-conf.exe ]]; then
     pacman -S --noconfirm git pacman
 fi
+if [[ ! -f /usr/bin/msys-curl-4.dll ]]; then
+    pacman -S --noconfirm libcurl
+fi
+if [[ ! -f /ucrt64/bin/libsqlite3-0.dll ]]; then
+    pacman -S --noconfirm mingw-w64-ucrt-x86_64-sqlite3
+fi
+pacman -S --needed --noconfirm mingw-w64-ucrt-x86_64-rust
+cargo --version
+rustc --version
+/usr/bin/git --version
 cd "$recipe"
 export PKGDEST="$output/work/packages" SRCPKGDEST="$output/work/sources"
 MINGW_ARCH=ucrt64 makepkg-mingw --syncdeps --noconfirm --cleanbuild --force 2>&1 | tee "$output/test-results/build-git.log"
