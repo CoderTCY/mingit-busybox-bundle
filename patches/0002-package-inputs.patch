@@ -1,16 +1,17 @@
 From: MinGit BusyBox Bundle maintainers
-Subject: [PATCH] Bind the official split-package recipe to bundle inputs
+Subject: [PATCH] Bind split packages to immutable inputs and offline docs
 
 Based on git-for-windows/MINGW-packages
 20a412e3b61c853fb3a290f02e78f59611d20342, maintained by
 Johannes Schindelin <johannes.schindelin@gmx.de>.
 Bundle integration changes: GPL-2.0-only.
-Preserve upstream resource checksums and all split-package build targets.
-Only the independently verified VCS commit uses SKIP.
+Preserve upstream resource checksums and every split-package target.
+Only the independently verified VCS commit uses SKIP. Disable Asciidoctor
+remote webfonts through its native attribute; retain embedded/local CSS.
 ---
 
 diff --git a/mingw-w64-git/PKGBUILD b/mingw-w64-git/PKGBUILD
-index ce106f0..535991e 100644
+index ce106f0..9f0b9ed 100644
 --- a/mingw-w64-git/PKGBUILD
 +++ b/mingw-w64-git/PKGBUILD
 @@ -17,7 +17,9 @@ pkgname=("${MINGW_PACKAGE_PREFIX}-${_realname}"
@@ -63,7 +64,7 @@ index ce106f0..535991e 100644
  
  COMPAT_CFLAGS=
  STRIP=
-@@ -146,6 +151,11 @@ _DEFAULT_EDITOR="${_DEFAULT_EDITOR:-nano}"
+@@ -146,10 +151,16 @@ _DEFAULT_EDITOR="${_DEFAULT_EDITOR:-nano}"
  
  prepare () {
    cd "$srcdir/git" &&
@@ -75,3 +76,8 @@ index ce106f0..535991e 100644
  
    cat >config.mak <<-EOF
  	CC = $CC
+ 	USE_ASCIIDOCTOR = YesPlease
++	ASCIIDOC_EXTRA += -a webfonts!
+ 	COMPAT_CFLAGS += $COMPAT_CFLAGS
+ 	LDFLAGS = $LDFLAGS
+ 	DEFAULT_EDITOR = $_DEFAULT_EDITOR

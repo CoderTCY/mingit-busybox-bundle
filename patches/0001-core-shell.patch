@@ -1,14 +1,20 @@
 From: Johannes Schindelin <johannes.schindelin@gmx.de>
 Subject: [PATCH] Allow overriding the POSIX shell with core.shell
 
-Port of Git for Windows PR #3301, production changes only:
+Port of Git for Windows PR #3301:
 https://github.com/git-for-windows/git/pull/3301
 5907f977c89ac328533b4950ab5fdb66d9e704fe
 28f4250189a24d748494aab76feb1aac4000b221
-Rebased context onto v2.56.0.windows.4; semantics unchanged.
+Rebased production context onto v2.56.0.windows.4; semantics unchanged.
 License: GPL-2.0-only, as the upstream Git source.
-The upstream mock-shell diagnostic tests are intentionally not carried;
-the bundle exercises real BusyBox shells, transports and hooks instead.
+The PR mock-shell diagnostic tests are not carried. Bundle acceptance uses
+real BusyBox shells, transports and hooks.
+
+Additional test-only correction by MinGit BusyBox Bundle maintainers:
+group t0061's two background launches so upstream's dynamic &&-chain
+linter retains fail_117. All poll-limit behavioral assertions remain.
+The unmodified stable test fails its chain check; this correction passes
+all 23 Windows-applicable tests (four platform skips). No lint is disabled.
 
 Signed-off-by: Johannes Schindelin <johannes.schindelin@gmx.de>
 ---
@@ -143,3 +149,41 @@ index 331c939..230c5a6 100644
 +const char *get_shell_path(const char *fallback);
 +
  #endif
+diff --git a/t/t0061-run-command.sh b/t/t0061-run-command.sh
+index 967d3f3..3194239 100755
+--- a/t/t0061-run-command.sh
++++ b/t/t0061-run-command.sh
+@@ -207,10 +207,12 @@ test_expect_success MINGW 'setup poll descriptor limit test' '
+ test_expect_success MINGW 'run_command uses full poll limit without stdin' '
+ 	: >started &&
+ 	rm -f release &&
+-	test-tool run-command run-command-parallel --tasks=40 40 \
+-		./wait-for-release "$PWD/started" "$PWD/release" \
+-		>out 2>err &
+-	parallel_pid=$! &&
++	{
++		test-tool run-command run-command-parallel --tasks=40 40 \
++			./wait-for-release "$PWD/started" "$PWD/release" \
++			>out 2>err &
++		parallel_pid=$!
++	} &&
+ 	test_when_finished cleanup_parallel &&
+ 	wait_for_line_count 40 started &&
+ 	touch release &&
+@@ -221,10 +223,12 @@ test_expect_success MINGW 'run_command uses full poll limit without stdin' '
+ test_expect_success MINGW 'run_command limits children with stdin pipes' '
+ 	: >started &&
+ 	rm -f release &&
+-	test-tool run-command run-command-stdin --tasks=40 40 \
+-		./wait-for-release "$PWD/started" "$PWD/release" stdin \
+-		>out 2>err &
+-	parallel_pid=$! &&
++	{
++		test-tool run-command run-command-stdin --tasks=40 40 \
++			./wait-for-release "$PWD/started" "$PWD/release" stdin \
++			>out 2>err &
++		parallel_pid=$!
++	} &&
+ 	test_when_finished cleanup_parallel &&
+ 	wait_for_line_count 31 started &&
+ 	sleep 1 &&
