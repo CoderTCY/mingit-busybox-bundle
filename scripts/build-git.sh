@@ -11,6 +11,8 @@ output=$(cygpath -au "$5")
 : "${BUNDLE_MINGW_PACKAGES_COMMIT:?}" "${BUNDLE_BUILD_EXTRA_COMMIT:?}"
 [[ $(git -C "$project" rev-parse HEAD) == "$BUNDLE_RECIPE_COMMIT" ]] || { echo 'Recipe identity mismatch' >&2; exit 1; }
 export PATH=/ucrt64/bin:/usr/bin:/usr/bin/core_perl:$PATH
+# Do not let a developer's global autoCRLF change archive/checksum bytes.
+export GIT_CONFIG_PARAMETERS="'core.autocrlf=false' 'core.eol=lf' 'core.longpaths=true'"
 export BUNDLE_CORE_PATCH_SHA256=$(sha256sum "$project/patches/0001-core-shell.patch" | cut -d' ' -f1)
 export PKGEXT=.pkg.tar.zst SRCEXT=.src.tar.gz
 export MINGW_ARCH=ucrt64
