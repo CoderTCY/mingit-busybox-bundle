@@ -230,6 +230,22 @@ foreach ($file in $payloadFiles) {
         $ownership.Add([ordered]@{ path = $relative; sha256 = $hash; source = 'build-extra'; commit = $inputs.toolchain.buildExtraCommit })
         continue
     }
+    if ($relative -ceq 'etc/gitattributes') {
+        # git-extra creates this file from its installed post_install heredoc;
+        # it is consequently absent from pacman's owned-file inventory.
+        $name = 'mingw-w64-ucrt-x86_64-git-extra'
+        if (-not $packages.ContainsKey($name)) { throw 'Missing gitattributes generator package' }
+        $generator = Join-Path $packages[$name].metadata 'install'
+        $scriptText = [IO.File]::ReadAllText($generator)
+        $blocks = @([regex]::Matches($scriptText, '(?ms)^[\t ]*cat > "\$ETC_GITATTRIBUTES" <<\\GITATTRIBUTES\r?\n(?<body>.*?)^GITATTRIBUTES\r?$'))
+        if ($blocks.Count -ne 1) { throw 'Cannot identify the installed gitattributes generator' }
+        $expected = $blocks[0].Groups['body'].Value.Replace("`r`n", "`n").TrimEnd("`n")
+        $actual = [IO.File]::ReadAllText($file.FullName).Replace("`r`n", "`n").TrimEnd("`n")
+        if ($actual -cne $expected) { throw 'Exported gitattributes differs from the exact installed generator' }
+        [void]$selected.Add($name)
+        $ownership.Add([ordered]@{ path = $relative; sha256 = $hash; source = 'sdk-package-post-install'; package = $name; version = $packages[$name].version; generatorSha256 = Get-Sha256 $generator })
+        continue
+    }
     if ($relative -ceq 'ucrt64/bin/git-lfs.exe' -or $relative.StartsWith('ucrt64/share/doc/git-lfs/', [StringComparison]::Ordinal) -or $relative.StartsWith('ucrt64/share/licenses/git-lfs/', [StringComparison]::Ordinal)) {
         $ownership.Add([ordered]@{ path = $relative; sha256 = $hash; source = 'git-lfs'; commit = $inputs.lfs.commit })
         continue
@@ -340,6 +356,10 @@ foreach ($name in ($selected | Sort-Object)) {
     $groups[$key].Add($package)
     Copy-SourceFile (Join-Path $package.metadata 'desc') "metadata/pacman/$name/desc" 'sdk-pacman-metadata' | Out-Null
     Copy-SourceFile (Join-Path $package.metadata 'files') "metadata/pacman/$name/files" 'sdk-pacman-metadata' | Out-Null
+    $installScript = Join-Path $package.metadata 'install'
+    if (Test-Path -LiteralPath $installScript) {
+        Copy-SourceFile $installScript "metadata/pacman/$name/install" 'sdk-package-post-install' | Out-Null
+    }
     foreach ($license in ($package.files | Where-Object { $_ -notmatch '/$' -and $_ -match '(^|/)(?:licenses?/|(?i:licen[cs]e|copying|copyright|notice|authors)(?:[._-][^/]*)?$)' })) {
         Assert-RelativePath $license
         Copy-SourceFile (Join-Path $SdkRoot $license) "licenses/installed/$name/$license" "sdk-package:$name@$($package.version)" | Out-Null
