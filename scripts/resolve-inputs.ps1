@@ -35,7 +35,7 @@ function Resolve-Lfs {
     param($Release)
     $tag = $Release.tag_name
     $asset = Get-BundleAsset $Release "git-lfs-windows-amd64-$tag.zip"
-    $source = Get-BundleAsset $Release "git-lfs-$tag.tar.gz"
+    $source = Get-BundleAsset $Release "git-lfs-vendor-$tag.tar.gz"
     [ordered]@{
         tag = $tag
         version = $tag.Substring(1)

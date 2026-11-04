@@ -22,6 +22,8 @@ SDK 必须是官方 `setup-git-for-windows-sdk` 锁定提交的 `build-installer
 
 SDK 子集可能保留 pacman 登记而裁掉实际工具或 DLL。构建入口从官方包恢复 MSYS Git、pacman、HTTPS 依赖、完整 GCC/CRT 及 Cargo 所需 SQLite，再执行官方配方；不以 `NO_RUST` 或 `NO_GETTEXT` 绕过缺依赖。离线手册使用 Asciidoctor 的 `webfonts!` 属性，不引用远程字体。
 
+LFS 对应源码取官方 `git-lfs-vendor-<tag>.tar.gz`（包含 vendored modules），不是不含依赖的普通源码 tarball；安装包内的 LFS 许可证和第三方 notices 也来自这份已校验归档。
+
 固定 Action 不能冻结整个滚动 SDK；构建记录实际 pacman 包和 compiler 版本，不承诺字节级可复现。产品没有可信代码签名证书，安装器为未签名自定义构建，不是 Git for Windows 官方签名发行版。
 
 ## 安装、升级与卸载

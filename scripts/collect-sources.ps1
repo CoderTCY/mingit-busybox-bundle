@@ -47,7 +47,7 @@ function Copy-SourceFile([string]$Source, [string]$Relative, [string]$Origin) {
     return $Relative
 }
 function Invoke-Git([string[]]$Arguments) {
-    $result = @(& $git @Arguments)
+    $result = @(& $git -c core.autocrlf=false -c core.eol=lf @Arguments)
     if ($LASTEXITCODE -ne 0) { throw "Source git command failed ($LASTEXITCODE): $($Arguments -join ' ')" }
     return $result
 }
