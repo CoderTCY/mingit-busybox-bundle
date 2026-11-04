@@ -338,7 +338,23 @@ Export-Commit (Join-Path $BuildRoot 'work/package-recipe/git') $inputs.git.commi
 $releaseCache = @{}
 $indexCache = @{}
 function Find-IndexedSource([string[]]$BinaryNames, [string]$Base, [string]$Version, [string[]]$FileNames, [string]$DestinationDirectory) {
+    $indexes = [Collections.Generic.List[string]]::new()
     foreach ($binary in $BinaryNames) {
+        if (-not $indexes.Contains($binary)) { $indexes.Add($binary) }
+    }
+    # Upstream uploads a shared source tarball once, sometimes with its MINGW64
+    # build rather than the later UCRT binary release. Consult only same-version
+    # source indexes; no binary from another architecture is ever downloaded.
+    $ucrtPrefix = 'mingw-w64-ucrt-x86_64-'
+    foreach ($binary in $BinaryNames) {
+        if ($binary.StartsWith($ucrtPrefix, [StringComparison]::Ordinal)) {
+            $shared = 'mingw-w64-x86_64-' + $binary.Substring($ucrtPrefix.Length)
+            if (-not $indexes.Contains($shared)) { $indexes.Add($shared) }
+        }
+    }
+    $baseIndex = if ($Base.StartsWith('mingw-w64-', [StringComparison]::Ordinal)) { 'mingw-w64-x86_64-' + $Base.Substring('mingw-w64-'.Length) } else { $Base }
+    if (-not $indexes.Contains($baseIndex)) { $indexes.Add($baseIndex) }
+    foreach ($binary in $indexes) {
         if (-not $indexCache.ContainsKey($binary)) {
             $relative = "metadata/indexes/$binary.versions.json"
             $url = "https://raw.githubusercontent.com/git-for-windows/pacman-repo/refs/heads/x86_64/$binary.versions.json"
