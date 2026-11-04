@@ -57,7 +57,10 @@ $lfsRelease = Get-StableRelease 'git-lfs/git-lfs' $LfsTag $lfsPattern
 $recipe = (& git -C $root rev-parse HEAD).Trim()
 if ($LASTEXITCODE -ne 0 -or $recipe -cnotmatch '^[0-9a-f]{40}$') { throw 'Commit the recipe before resolving inputs' }
 $gitVersion = $gitRelease.tag_name.Substring(1).Replace('.windows.', '.')
-$baseline = Get-BundleAsset $gitRelease "MinGit-$gitVersion-busybox-64-bit.zip"
+# Upstream omits the Windows revision only for .windows.1 asset filenames.
+# Keep the four-part package/PE version separate from that naming convention.
+$assetVersion = $gitVersion -replace '\.1$', ''
+$baseline = Get-BundleAsset $gitRelease "MinGit-$assetVersion-busybox-64-bit.zip"
 $lfs = Resolve-Lfs $lfsRelease
 
 # Lock the highest older stable release for the real LFS-only upgrade fixture.

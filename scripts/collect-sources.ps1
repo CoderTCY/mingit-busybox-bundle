@@ -10,6 +10,7 @@ param(
     [Parameter(Mandatory)][string]$InputsPath
 )
 . "$PSScriptRoot/common.ps1"
+Add-Type -AssemblyName System.Formats.Tar
 $PayloadRoot = [IO.Path]::GetFullPath($PayloadRoot)
 $OutputDirectory = [IO.Path]::GetFullPath($OutputDirectory)
 $SdkRoot = [IO.Path]::GetFullPath($SdkRoot)
@@ -360,7 +361,10 @@ foreach ($name in ($selected | Sort-Object)) {
     if (Test-Path -LiteralPath $installScript) {
         Copy-SourceFile $installScript "metadata/pacman/$name/install" 'sdk-package-post-install' | Out-Null
     }
-    foreach ($license in ($package.files | Where-Object { $_ -notmatch '/$' -and $_ -match '(^|/)(?:licenses?/|(?i:licen[cs]e|copying|copyright|notice|authors)(?:[._-][^/]*)?$)' })) {
+    # Preserve the notices actually shipped in the payload. The SDK subset may
+    # deliberately omit unrelated package documentation such as AUTHORS files;
+    # the complete source archive is collected independently below.
+    foreach ($license in ($package.files | Where-Object { $neededPaths.Contains($_) -and $_ -notmatch '/$' -and $_ -match '(^|/)(?:licenses?/|(?i:licen[cs]e|copying|copyright|notice|authors)(?:[._-][^/]*)?$)' })) {
         Assert-RelativePath $license
         Copy-SourceFile (Join-Path $SdkRoot $license) "licenses/installed/$name/$license" "sdk-package:$name@$($package.version)" | Out-Null
     }

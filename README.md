@@ -6,6 +6,8 @@
 
 `build/toolchain.lock.json` 固定构建配方与工具版本。`scripts/resolve-inputs.ps1` 将稳定版本、解引用源码 commit、官方资产 SHA-256、本地补丁及本工程 commit 写成一次性输入快照；已有快照拒绝覆盖。GitHub API 错误会失败，不代表“没有更新”。
 
+PE 数值版本使用 Git 的四段版本；含 LFS 和 recipe 的完整版本写入文本版本资源。官方 `.windows.1` 的 ZIP 文件名省略末尾 `.1`，输入解析只在资产名中处理该规则，不改变锁定 tag、commit 或四段版本。
+
 日常构建、打包和安装验收在 GitHub Actions 的独立 Windows runner 上执行，不要求在开发机编译：
 
 ```powershell
