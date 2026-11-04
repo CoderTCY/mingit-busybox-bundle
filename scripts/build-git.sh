@@ -13,10 +13,12 @@ output=$(cygpath -au "$5")
 export PATH=/ucrt64/bin:/usr/bin:/usr/bin/core_perl:$PATH
 # Do not let a developer's global autoCRLF change archive/checksum bytes.
 export GIT_CONFIG_PARAMETERS="'core.autocrlf=false' 'core.eol=lf' 'core.longpaths=true'"
-export BUNDLE_CORE_PATCH_SHA256=$(sha256sum "$project/patches/0001-core-shell.patch" | cut -d' ' -f1)
+BUNDLE_CORE_PATCH_SHA256=$(sha256sum "$project/patches/0001-core-shell.patch" | cut -d' ' -f1)
+export BUNDLE_CORE_PATCH_SHA256
 export PKGEXT=.pkg.tar.zst SRCEXT=.src.tar.gz
 export MINGW_ARCH=ucrt64
-export MAKEFLAGS="-j$(nproc)"
+MAKEFLAGS="-j$(nproc)"
+export MAKEFLAGS
 mkdir -p "$output/work" "$output/test-results" "$output/work/packages" "$output/work/sources"
 
 checkout_pinned() {
@@ -53,6 +55,11 @@ git -C "$recipe/git" symbolic-ref HEAD refs/heads/bundle-source
 [[ $(git -C "$recipe/git" rev-parse HEAD) == "$BUNDLE_GIT_COMMIT" ]] || exit 1
 
 pacman -Sy --noconfirm
+# The SDK subset retains package metadata but trims these binaries. Reinstall
+# their official packages, rather than bypassing makepkg's MSYS Git wrapper.
+if [[ ! -x /usr/bin/git.exe || ! -x /usr/bin/pacman-conf.exe ]]; then
+    pacman -S --noconfirm git pacman
+fi
 cd "$recipe"
 export PKGDEST="$output/work/packages" SRCPKGDEST="$output/work/sources"
 MINGW_ARCH=ucrt64 makepkg-mingw --syncdeps --noconfirm --cleanbuild --force 2>&1 | tee "$output/test-results/build-git.log"
@@ -61,13 +68,15 @@ make -C "$recipe/src/git" test T=t0061-run-command.sh 2>&1 | tee "$output/test-r
 MINGW_ARCH=ucrt64 makepkg-mingw --allsource --noconfirm --force 2>&1 | tee "$output/test-results/allsource.log"
 
 # Select packages by metadata, never glob-install stale products or extra splits.
-mapfile -t built < <(MINGW_ARCH=ucrt64 makepkg-mingw --packagelist)
+package_list=$(MINGW_ARCH=ucrt64 makepkg-mingw --packagelist)
+mapfile -t built <<<"$package_list"
 selected=()
 for wanted in mingw-w64-ucrt-x86_64-git mingw-w64-ucrt-x86_64-git-doc-html mingw-w64-ucrt-x86_64-git-for-windows-addons; do
     matches=()
     for package in "${built[@]}"; do
         [[ -f $package ]] || { echo "Missing built package $package" >&2; exit 1; }
-        read -r name version < <(pacman -Qp "$package")
+        metadata=$(pacman -Qp "$package")
+        read -r name version <<<"$metadata"
         [[ $name != "$wanted" ]] || matches+=("$package")
     done
     [[ ${#matches[@]} == 1 ]] || { echo "Expected one built $wanted" >&2; exit 1; }
