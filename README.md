@@ -20,6 +20,8 @@ SDK 必须是官方 `setup-git-for-windows-sdk` 锁定提交的 `build-installer
 
 `patches/0001-core-shell.patch` 移植 Johannes Schindelin 的 [PR #3301](https://github.com/git-for-windows/git/pull/3301) 两个固定提交的生产改动，未引入其 mock-shell 测试。`patches/0002-package-inputs.patch` 适配固定的官方 split-package 配方；保留 gettext、Rust、TLS 和内部需要的 man 目标。构建版本带 `.busyboxbundle.<recipe>`，不是官方未修改二进制。
 
+原生 BusyBox 不进行 MSYS 的参数路径转换；第一份补丁也在 Git 的 `file://` 解析边界把标准 Windows URI 的 `/C:/...` 转为原生 `C:/...`，保留其他协议、UNC 和 POSIX 路径的原有处理。
+
 稳定源码中的 `t0061` 有两处后台命令没有分组，会破坏测试自身的动态 `&&` 链检查。第一份补丁同时修正这两处测试语法，保留 poll-limit 的全部断言；不禁用链检查。源码回归入口为 `make test T=t0061-run-command.sh`，不能代替安装后的 BusyBox/LFS/locale/帮助验收。
 
 SDK 子集可能保留 pacman 登记而裁掉实际工具或 DLL。构建入口从官方包恢复 MSYS Git、pacman、HTTPS 依赖、完整 GCC/CRT 及 Cargo 所需 SQLite，再执行官方配方；不以 `NO_RUST` 或 `NO_GETTEXT` 绕过缺依赖。离线手册使用 Asciidoctor 的 `webfonts!` 属性，不引用远程字体。

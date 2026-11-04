@@ -97,8 +97,8 @@ The other attachments are fixed inputs, provenance, SHA-256 checksums and corres
     if ($null -eq $release -or -not $release.draft) { throw 'New release was not created as a draft' }
 }
 $releaseId = $release.id
-# Original input identity is uploaded first. A draft missing either identity
-# attachment on a later run fails closed rather than borrowing fresh inputs.
+# Original input identity is uploaded first. A draft without that snapshot
+# fails closed; a matching snapshot permits resuming a partial asset upload.
 foreach ($name in @('inputs.json', 'build-manifest.json', 'sources.zip', $names[0], 'SHA256SUMS')) {
     $current = Get-BundleApi "repos/$Repository/releases/$releaseId"
     if (-not $current.draft -or $current.tag_name -cne $inputs.releaseTag) { throw 'Release ceased to be the expected draft; refusing to overwrite assets' }

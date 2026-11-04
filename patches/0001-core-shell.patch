@@ -10,6 +10,13 @@ License: GPL-2.0-only, as the upstream Git source.
 The PR mock-shell diagnostic tests are not carried. Bundle acceptance uses
 real BusyBox shells, transports and hooks.
 
+Additional native file-transport correction by MinGit BusyBox Bundle
+maintainers: normalize the decoded file:///C:/... path to C:/... before
+shell quoting in parse_connect_url(). Native BusyBox does not provide
+MSYS argument conversion. Git's DOS-drive helper keeps POSIX paths,
+UNC paths and non-file protocols unchanged. This applies equally to
+upload-pack and receive-pack; URL decoding and argv quoting stay intact.
+
 Additional test-only correction by MinGit BusyBox Bundle maintainers:
 group t0061's two background launches so upstream's dynamic &&-chain
 linter retains fail_117. All poll-limit behavioral assertions remain.
@@ -59,6 +66,23 @@ index 9c5a514..377536e 100644
  		p = path_lookup(cmd, 0);
  		if (!p)
  			ret = 0;
+diff --git a/connect.c b/connect.c
+--- a/connect.c
++++ b/connect.c
+@@ -1156,6 +1156,13 @@ static enum url_scheme parse_connect_url(const char *url_orig, char **ret_host,
+ 			path++;
+ 	}
+ 
++	/*
++	 * Native shells do not convert file:///C:/... to a DOS drive path.
++	 */
++	if (scheme == URL_SCHEME_FILE && *path == '/' &&
++	    has_dos_drive_prefix(path + 1))
++		path++;
++
+ 	path = xstrdup(path);
+ 	*end = '\0';
+ 
 diff --git a/help.c b/help.c
 index 4624149..1085b1e 100644
 --- a/help.c

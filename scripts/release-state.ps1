@@ -86,13 +86,18 @@ function Assert-BundleReleaseInputs {
     $temporary = Join-Path ([IO.Path]::GetTempPath()) ('bundle-identity-' + [Guid]::NewGuid().ToString('N'))
     [IO.Directory]::CreateDirectory($temporary) | Out-Null
     try {
-        foreach ($name in @('inputs.json', 'build-manifest.json')) {
-            Receive-BundleReleaseAsset $Repository $Release $name (Join-Path $temporary $name)
-        }
+        Receive-BundleReleaseAsset $Repository $Release 'inputs.json' (Join-Path $temporary 'inputs.json')
         $original = Get-Content -LiteralPath (Join-Path $temporary 'inputs.json') -Raw | ConvertFrom-Json
-        $manifest = Get-Content -LiteralPath (Join-Path $temporary 'build-manifest.json') -Raw | ConvertFrom-Json
         Assert-BundleSameInputs $Inputs $original
-        Assert-BundleSameInputs $Inputs $manifest.inputs
+        # A draft may have stopped immediately after its original snapshot was
+        # uploaded. That snapshot is mandatory; validate a build manifest when
+        # present, and always require it once the release is public.
+        $manifestAssets = @($Release.assets | Where-Object name -CEQ 'build-manifest.json')
+        if ($manifestAssets.Count -ne 0 -or -not $Release.draft) {
+            Receive-BundleReleaseAsset $Repository $Release 'build-manifest.json' (Join-Path $temporary 'build-manifest.json')
+            $manifest = Get-Content -LiteralPath (Join-Path $temporary 'build-manifest.json') -Raw | ConvertFrom-Json
+            Assert-BundleSameInputs $Inputs $manifest.inputs
+        }
         if ($Release.prerelease) { throw 'Stable bundle identity is occupied by a prerelease' }
         if ($Release.draft -and $Release.target_commitish -cne $Inputs.recipeCommit) { throw 'Draft target differs from the fixed recipe commit' }
     } finally {
