@@ -34,9 +34,10 @@ $report = [ordered]@{ releaseTag = $inputs.releaseTag; installerSha256 = (Get-Fi
 $process = $null
 $knownProcesses = New-Object 'Collections.Generic.HashSet[int]'
 
-function Get-InstallerWindow {
+function Get-InstallerWindow([switch]$AllowExit) {
     $deadline = [DateTime]::UtcNow.AddSeconds(30)
     do {
+        if ($AllowExit -and $process.HasExited) { return $null }
         $allProcesses = @(Get-CimInstance Win32_Process)
         do {
             $added = $false
@@ -112,7 +113,7 @@ try {
         $report.pages += $page
         if (($names -join "`n") -match '(?i)ready to install') {
             $ready = $true
-            $report.checks += @{ name = 'wizard-integrated-components'; screenshot = $page.screenshot; sha256 = $page.sha256; notes = 'Traversed every real wizard page up to Ready to Install: no component page or optional required component; cancelled without installing.' }
+            $report.checks += @{ name = 'wizard-integrated-components'; screenshot = $page.screenshot; sha256 = $page.sha256; notes = 'Traversed every real wizard page up to Ready to Install: no component page or optional required component.' }
             break
         }
         $accept = $controls | Where-Object { $_.Current.Name -match '(?i)^I accept the agreement' -and -not $_.Current.IsOffscreen } | Select-Object -First 1
@@ -126,11 +127,14 @@ try {
     $cancel = Find-Button (Get-Controls $window) '(?i)^&?Cancel$'
     if (-not $cancel) { throw 'Real wizard Cancel button missing.' }
     Invoke-UiControl $cancel
-    Start-Sleep -Milliseconds 400
-    if (-not $process.HasExited) {
-        $confirmation = Get-InstallerWindow
+    $cancelDeadline = [DateTime]::UtcNow.AddSeconds(30)
+    while (-not $process.HasExited) {
+        $confirmation = Get-InstallerWindow -AllowExit
+        if (-not $confirmation) { break }
         $yes = Find-Button (Get-Controls $confirmation) '(?i)^&?Yes$'
         if ($yes) { Invoke-UiControl $yes }
+        if ([DateTime]::UtcNow -gt $cancelDeadline) { throw 'Wizard did not complete cancellation.' }
+        Start-Sleep -Milliseconds 100
     }
     if (-not $process.WaitForExit(30000)) { throw 'Wizard failed to exit after cancellation.' }
     $report.cancelExitCode = $process.ExitCode

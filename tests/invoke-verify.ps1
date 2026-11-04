@@ -57,15 +57,21 @@ try {
     $bootstrap = @'
 $ErrorActionPreference = 'Stop'
 $env:CI = 'true'
-# Secondary-logon children can inherit the administrator's environment; derive
-# profile locations from the actual child token before invoking any installer.
-$profile = [Environment]::GetFolderPath([Environment+SpecialFolder]::UserProfile)
-if (-not $profile) { throw 'Restricted token has no loaded user profile.' }
+# Resolve the loaded profile by the real token SID. Environment.GetFolderPath
+# can reuse inherited USERPROFILE/APPDATA values under secondary logon.
+$identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+try { $sid = $identity.User.Value } finally { $identity.Dispose() }
+$profileKey = [Microsoft.Win32.Registry]::LocalMachine.OpenSubKey("SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\$sid")
+if (-not $profileKey) { throw 'Current token has no registered Windows profile.' }
+try { $profile = [string]$profileKey.GetValue('ProfileImagePath', $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames) }
+finally { $profileKey.Dispose() }
+$profile = [Environment]::ExpandEnvironmentVariables($profile)
+if (-not $profile -or -not [IO.Path]::IsPathRooted($profile)) { throw 'Current token has no valid Windows profile path.' }
 $env:USERPROFILE = $profile
 $env:HOME = $profile
 Set-Variable -Name HOME -Value $profile -Force
-$env:APPDATA = [Environment]::GetFolderPath([Environment+SpecialFolder]::ApplicationData)
-$env:LOCALAPPDATA = [Environment]::GetFolderPath([Environment+SpecialFolder]::LocalApplicationData)
+$env:APPDATA = Join-Path $profile 'AppData/Roaming'
+$env:LOCALAPPDATA = Join-Path $profile 'AppData/Local'
 $env:TEMP = Join-Path $env:LOCALAPPDATA 'Temp'
 $env:TMP = $env:TEMP
 [IO.Directory]::CreateDirectory($env:TEMP) | Out-Null
