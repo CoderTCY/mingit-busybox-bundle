@@ -61,10 +61,10 @@ function Get-BundleRelease {
 }
 
 function Receive-BundleApiFile {
-    param([string]$ApiPath, [string]$Destination)
+    param([string]$ApiPath, [string]$Destination, [string]$Accept = 'application/vnd.github+json')
     $token = if ($env:GH_TOKEN) { $env:GH_TOKEN } else { $env:GITHUB_TOKEN }
     if (-not $token) { throw 'Authenticated GitHub download requires a token' }
-    $headers = @{ Authorization = "Bearer $token"; Accept = 'application/octet-stream'; 'X-GitHub-Api-Version' = '2022-11-28'; 'User-Agent' = 'MinGit-BusyBox-Bundle' }
+    $headers = @{ Authorization = "Bearer $token"; Accept = $Accept; 'X-GitHub-Api-Version' = '2022-11-28'; 'User-Agent' = 'MinGit-BusyBox-Bundle' }
     # PowerShell strips Authorization on redirects to the signed asset host.
     Invoke-WebRequest -Uri "https://api.github.com/$ApiPath" -Headers $headers -OutFile $Destination
 }
@@ -73,7 +73,7 @@ function Receive-BundleReleaseAsset {
     param([string]$Repository, $Release, [string]$Name, [string]$Destination)
     $assets = @($Release.assets | Where-Object name -CEQ $Name)
     if ($assets.Count -ne 1 -or $assets[0].state -cne 'uploaded') { throw "Release lacks unique uploaded $Name" }
-    Receive-BundleApiFile "repos/$Repository/releases/assets/$($assets[0].id)" $Destination
+    Receive-BundleApiFile "repos/$Repository/releases/assets/$($assets[0].id)" $Destination -Accept 'application/octet-stream'
     if ((Get-Item -LiteralPath $Destination).Length -ne $assets[0].size) { throw "Downloaded asset length mismatch: $Name" }
     if ($assets[0].PSObject.Properties.Name -contains 'digest' -and $assets[0].digest) {
         $hash = (Get-FileHash -LiteralPath $Destination -Algorithm SHA256).Hash.ToLowerInvariant()

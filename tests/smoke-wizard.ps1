@@ -44,11 +44,20 @@ function Get-InstallerWindow([switch]$AllowExit) {
             foreach ($p in $allProcesses) { if ($knownProcesses.Contains([int]$p.ParentProcessId) -and $knownProcesses.Add([int]$p.ProcessId)) { $added = $true } }
         } while ($added)
         $windows = [Windows.Automation.AutomationElement]::RootElement.FindAll([Windows.Automation.TreeScope]::Children, [Windows.Automation.Condition]::TrueCondition)
-        foreach ($window in $windows) {
-            if ($knownProcesses.Contains($window.Current.ProcessId) -and -not $window.Current.IsOffscreen -and $window.Current.IsEnabled) { return $window }
+        $windowCondition = [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::ControlTypeProperty, [Windows.Automation.ControlType]::Window)
+        $observed = New-Object 'Collections.Generic.List[object]'
+        foreach ($top in $windows) {
+            if (-not $knownProcesses.Contains($top.Current.ProcessId)) { continue }
+            # An owned modal dialog can be nested under its disabled owner in
+            # the UIA tree rather than appearing as a direct desktop child.
+            foreach ($window in $top.FindAll([Windows.Automation.TreeScope]::Subtree, $windowCondition)) {
+                $observed.Add(@{ name = $window.Current.Name; processId = $window.Current.ProcessId; enabled = $window.Current.IsEnabled; offscreen = $window.Current.IsOffscreen })
+                if ($knownProcesses.Contains($window.Current.ProcessId) -and -not $window.Current.IsOffscreen -and $window.Current.IsEnabled) { return $window }
+            }
         }
         Start-Sleep -Milliseconds 200
     } while ([DateTime]::UtcNow -lt $deadline)
+    [IO.File]::WriteAllText((Join-Path $ScratchRoot 'window-timeout.json'), (@{ windows = $observed.ToArray(); processIds = @($knownProcesses) } | ConvertTo-Json -Depth 5), $utf8)
     throw 'No visible real installer window appeared. An interactive desktop is required.'
 }
 

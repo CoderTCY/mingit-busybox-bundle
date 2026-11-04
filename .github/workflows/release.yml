@@ -200,7 +200,11 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: verify-${{ matrix.scope }}
-          path: ${{ runner.temp }}/bundle-verify-${{ matrix.scope }}/
+          path: |
+            ${{ runner.temp }}/bundle-verify-${{ matrix.scope }}/**/*.json
+            ${{ runner.temp }}/bundle-verify-${{ matrix.scope }}/**/*.jsonl
+            ${{ runner.temp }}/bundle-verify-${{ matrix.scope }}/**/*.log
+            ${{ runner.temp }}/bundle-verify-${{ matrix.scope }}/**/*.png
           if-no-files-found: warn
           include-hidden-files: true
           compression-level: 0
