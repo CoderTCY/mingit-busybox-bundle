@@ -2,6 +2,10 @@
   "sdkActionCommit": "cd1e73e1d50842848a6bacf9ab671e6c4237b097",
   "buildExtraCommit": "875033658093092540effba4ec58bd64042f56a5",
   "mingwPackagesCommit": "20a412e3b61c853fb3a290f02e78f59611d20342",
+  "busybox": {
+    "commit": "d8d8bb397f1e200ba5a871dc6aa4af819b23f32a",
+    "version": "1.38.0.21234.d8d8bb397"
+  },
   "inno": {
     "version": "7.1.1",
     "url": "https://github.com/jrsoftware/issrc/releases/download/is-7_1_1/innosetup-7.1.1-x64.exe",

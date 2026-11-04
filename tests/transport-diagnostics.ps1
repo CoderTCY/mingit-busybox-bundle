@@ -69,6 +69,17 @@ function Save-TransportDiagnostics([string] $Root, [string] $Source, [string] $T
         # Windows token query, not an environment-derived username.
         $contextAlias = 'alias.transport-context=!f() { printf "PATH=%s\nHOME=%s\nUSERPROFILE=%s\nUSERNAME=%s\nHOMEDRIVE=%s\nHOMEPATH=%s\nCOMSPEC=%s\n" "$PATH" "$HOME" "$USERPROFILE" "$USERNAME" "$HOMEDRIVE" "$HOMEPATH" "$COMSPEC"; command -v git-upload-pack || return; type git-upload-pack || return; whoami.exe /all; }; f'
         $shellProbe = 'alias.transport-probe=!f() { exec "$@"; }; f'
+        # Read the native child's UTF-16 environment, not another BusyBox
+        # applet's UTF-8 view. EncodedCommand avoids a second shell quoting
+        # layer; Console.WriteLine emits UTF-8 into the existing command log.
+        # Only the isolated PATH and this probe's Git-generated config are
+        # exposed. Never enumerate the child's whole environment.
+        $nativePowerShell = Join-Path $env:SystemRoot 'System32/WindowsPowerShell/v1.0/powershell.exe'
+        $nativeEnvironmentCommand = '$env:PSModulePath = [IO.Path]::Combine($PSHOME, "Modules"); [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false); foreach ($name in @("PATH", "GIT_CONFIG_PARAMETERS")) { [Console]::WriteLine((ConvertTo-Json -Compress -InputObject @{ name = $name; value = [Environment]::GetEnvironmentVariable($name) })) }'
+        $nativeEnvironmentArguments = @('-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($nativeEnvironmentCommand)))
+        $nativeEnvironmentAlias = 'alias.transport-native-env=!f() { printf "shell.PATH=%s\nshell.GIT_CONFIG_PARAMETERS=%s\n" "$PATH" "$GIT_CONFIG_PARAMETERS"; exec "$@"; }; f'
+        # Compare exec with a normal child: ash uses a forkshell for the latter.
+        $nativeChildEnvironmentAlias = 'alias.transport-native-child-env=!f() { printf "shell.PATH=%s\nshell.GIT_CONFIG_PARAMETERS=%s\n" "$PATH" "$GIT_CONFIG_PARAMETERS"; "$@"; status=$?; return "$status"; }; f'
         $probes = @(
             @{ name = 'git-shell-context-and-token'; file = $script:Git; arguments = @('-c', $contextAlias, 'transport-context') },
             @{ name = 'parent-token'; file = (Join-Path $env:SystemRoot 'System32/whoami.exe'); arguments = @('/all') },
@@ -76,6 +87,9 @@ function Save-TransportDiagnostics([string] $Root, [string] $Source, [string] $T
             @{ name = 'busybox-file-modes'; file = (Join-Path $Root 'ucrt64/bin/busybox.exe'); arguments = @('stat', '-c', '%a %u %g %n', '--') + $paths },
             @{ name = 'shell-token'; file = $script:Git; arguments = @('-c', $shellProbe, 'transport-probe', (Join-Path $env:SystemRoot 'System32/whoami.exe').Replace('\', '/'), '/all') },
             @{ name = 'shell-path-candidates'; file = $script:Git; arguments = @('-c', $shellProbe, 'transport-probe', (Join-Path $env:SystemRoot 'System32/where.exe').Replace('\', '/'), 'git-upload-pack') },
+            @{ name = 'direct-native-environment'; file = $nativePowerShell; arguments = $nativeEnvironmentArguments },
+            @{ name = 'shell-exec-native-environment'; file = $script:Git; arguments = @('-c', $nativeEnvironmentAlias, 'transport-native-env', $nativePowerShell.Replace('\', '/')) + $nativeEnvironmentArguments },
+            @{ name = 'shell-child-native-environment'; file = $script:Git; arguments = @('-c', $nativeChildEnvironmentAlias, 'transport-native-child-env', $nativePowerShell.Replace('\', '/')) + $nativeEnvironmentArguments },
             @{ name = 'git-builtin-upload-pack'; file = $script:Git; arguments = @('upload-pack', '--advertise-refs', $Source) },
             @{ name = 'shell-path-upload-pack'; file = $script:Git; arguments = @('-c', $shellProbe, 'transport-probe', 'git-upload-pack', '--advertise-refs', $Source) }
         )

@@ -8,7 +8,7 @@ output=$(cygpath -au "$5")
 [[ $MSYSTEM == UCRT64 && $MINGW_PREFIX == /ucrt64 ]] || { echo 'UCRT64 SDK required' >&2; exit 1; }
 [[ $project != *' '* && $output != *' '* ]] || { echo 'SDK build paths must not contain spaces' >&2; exit 1; }
 [[ $BUNDLE_GIT_COMMIT =~ ^[0-9a-f]{40}$ && $BUNDLE_RECIPE_COMMIT =~ ^[0-9a-f]{40}$ ]] || exit 2
-: "${BUNDLE_MINGW_PACKAGES_COMMIT:?}" "${BUNDLE_BUILD_EXTRA_COMMIT:?}"
+: "${BUNDLE_MINGW_PACKAGES_COMMIT:?}" "${BUNDLE_BUILD_EXTRA_COMMIT:?}" "${BUNDLE_BUSYBOX_COMMIT:?}" "${BUNDLE_BUSYBOX_VERSION:?}"
 [[ $(git -C "$project" rev-parse HEAD) == "$BUNDLE_RECIPE_COMMIT" ]] || { echo 'Recipe identity mismatch' >&2; exit 1; }
 export PATH=/ucrt64/bin:/usr/bin:/usr/bin/core_perl:$PATH
 # Do not let a developer's global autoCRLF change archive/checksum bytes.
@@ -80,6 +80,9 @@ cargo --version
 rustc --version
 x86_64-w64-mingw32-gcc --version
 /usr/bin/git --version
+# Install the same-source custom BusyBox before Git packaging/export; the SDK
+# package inventory below must describe both rebuilt components.
+bash "$project/scripts/build-busybox.sh" "$project" "$output"
 cd "$recipe"
 export PKGDEST="$output/work/packages" SRCPKGDEST="$output/work/sources"
 MINGW_ARCH=ucrt64 makepkg-mingw --syncdeps --noconfirm --cleanbuild --force 2>&1 | tee "$output/test-results/build-git.log"

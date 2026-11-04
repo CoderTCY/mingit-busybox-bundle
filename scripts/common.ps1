@@ -61,9 +61,10 @@ function Assert-BundleInputs {
     if ($Inputs.releaseTag -cne $expected) { throw 'Release identity differs from input snapshot' }
     $lock = Get-Content -LiteralPath (Join-Path $ProjectRoot 'build/toolchain.lock.json') -Raw | ConvertFrom-Json
     if (($lock | ConvertTo-Json -Depth 20 -Compress) -cne ($Inputs.toolchain | ConvertTo-Json -Depth 20 -Compress)) { throw 'Toolchain lock differs from snapshot' }
-    if (@($Inputs.patches).Count -ne 2) { throw 'Both local patches are required before building' }
+    if ($Inputs.toolchain.busybox.commit -notmatch '^[0-9a-f]{40}$') { throw 'BusyBox source is not a pinned commit' }
+    $expectedPatches = @('patches/0001-core-shell.patch', 'patches/0002-package-inputs.patch', 'patches/0003-busybox-unicode.patch', 'patches/0004-busybox-package-inputs.patch')
+    if (($Inputs.patches.path -join "`n") -cne ($expectedPatches -join "`n")) { throw 'All four reviewed Git and BusyBox patches are required' }
     foreach ($patch in $Inputs.patches) {
-        if ($patch.path -notin @('patches/0001-core-shell.patch', 'patches/0002-package-inputs.patch')) { throw 'Unexpected patch path' }
         if ((Get-FileHash -LiteralPath (Join-Path $ProjectRoot $patch.path) -Algorithm SHA256).Hash.ToLowerInvariant() -cne $patch.sha256) { throw "Patch changed: $($patch.path)" }
     }
 }

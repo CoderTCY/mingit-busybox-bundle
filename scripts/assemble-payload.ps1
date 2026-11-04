@@ -14,6 +14,8 @@ $env:MSYSTEM = 'UCRT64'
 $env:CHERE_INVOKING = '1'
 $env:BUNDLE_GIT_TAG = $inputs.git.tag
 $env:BUNDLE_BUILD_EXTRA_COMMIT = $inputs.toolchain.buildExtraCommit
+$env:BUNDLE_BUSYBOX_VERSION = $inputs.toolchain.busybox.version
+$builtBusyboxHash = (Get-FileHash -LiteralPath (Join-Path $SdkRoot 'ucrt64/bin/busybox.exe') -Algorithm SHA256).Hash.ToLowerInvariant()
 Invoke-BundleNative (Join-Path $SdkRoot 'usr/bin/bash.exe') @('--login', (Join-Path $PSScriptRoot 'export-payload.sh'), $root, $OutputRoot, $inputs.git.packageVersion, $inputs.recipeCommit)
 $exports = @(Get-ChildItem -LiteralPath (Join-Path $work 'export') -Filter '*.zip' -File)
 if ($exports.Count -ne 1) { throw 'Official MinGit exporter must produce exactly one ZIP' }
@@ -21,6 +23,7 @@ Expand-Archive -LiteralPath $exports[0].FullName -DestinationPath $payload
 foreach ($required in @('cmd/git.exe','ucrt64/bin/git.exe','ucrt64/bin/ash.exe','ucrt64/bin/busybox.exe','ucrt64/bin/libintl-8.dll','ucrt64/bin/libiconv-2.dll','etc/libexec-moved.txt','etc/package-versions.txt')) {
     if (-not (Test-Path -LiteralPath (Join-Path $payload $required))) { throw "Exporter omitted required file: $required" }
 }
+if ((Get-FileHash -LiteralPath (Join-Path $payload 'ucrt64/bin/busybox.exe') -Algorithm SHA256).Hash.ToLowerInvariant() -cne $builtBusyboxHash) { throw 'Exporter did not preserve the rebuilt BusyBox executable' }
 $docs = Join-Path $SdkRoot 'ucrt64/share/doc/git-doc'
 $docTarget = Join-Path $payload 'ucrt64/share/doc/git-doc'
 [IO.Directory]::CreateDirectory($docTarget) | Out-Null
@@ -70,6 +73,7 @@ $manifest = [ordered]@{
     compiler = @(Get-Content -LiteralPath (Join-Path $work 'compiler.txt'))
     components = [ordered]@{
         git = [ordered]@{ commit = $inputs.git.commit; packages = @(Get-Content -LiteralPath (Join-Path $work 'built-packages.txt') | ForEach-Object { [IO.Path]::GetFileName($_) }) }
+        busybox = [ordered]@{ commit = $inputs.toolchain.busybox.commit; version = "$($inputs.toolchain.busybox.version).busyboxbundle.$($inputs.recipeCommit.Substring(0,12))-1"; packages = @(Get-Content -LiteralPath (Join-Path $work 'busybox-packages.txt') | ForEach-Object { [IO.Path]::GetFileName($_) }) }
         lfs = $inputs.lfs
         exporter = [ordered]@{ commit = $inputs.toolchain.buildExtraCommit; sha256 = (Get-FileHash -LiteralPath $exports[0].FullName -Algorithm SHA256).Hash.ToLowerInvariant() }
         opener = [ordered]@{ source = 'native/mingit-open.c'; recipeCommit = $inputs.recipeCommit }

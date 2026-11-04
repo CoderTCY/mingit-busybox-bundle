@@ -55,6 +55,9 @@ function Test-CorePayload([string] $Root, [string] $Label) {
     $version = (Invoke-Git @('--version')).stdout.Trim()
     $expectedVersion = 'git version ' + $script:Inputs.git.tag.Substring(1) + '.busyboxbundle.' + $script:Inputs.recipeCommit.Substring(0, 12)
     Assert-Acceptance ($version -ceq $expectedVersion) "Custom Git version mismatch: $version != $expectedVersion"
+    $busyboxVersion = (Invoke-AcceptanceProcess -File (Join-Path $Root 'ucrt64/bin/busybox.exe') -Arguments @('--version') -Directory $script:RunRoot -Environment $script:GitEnvironment).stdout.Trim()
+    $expectedBusyboxVersion = $script:Inputs.toolchain.busybox.version + '.busyboxbundle.' + $script:Inputs.recipeCommit.Substring(0, 12)
+    Assert-Acceptance ($busyboxVersion -match ('^BusyBox v' + [Regex]::Escape($expectedBusyboxVersion) + '(?:\s|$)')) "Custom BusyBox version mismatch: $busyboxVersion"
     Assert-WithinRoot (Invoke-Git @('--exec-path')).stdout.Trim() $Root
     $shell = (Invoke-Git @('var', 'GIT_SHELL_PATH')).stdout.Trim()
     Assert-WithinRoot $shell $Root
@@ -103,6 +106,9 @@ function Test-CorePayload([string] $Root, [string] $Label) {
         $refs = (Invoke-Git @('ls-remote', $transport.Source)).stdout
         Assert-Acceptance ($refs -match ('(?m)^' + [Regex]::Escape($head) + '\s+refs/heads/main\r?$')) "#5469: $($transport.Name) ls-remote lost main."
     }
+    $nativeConfig = 'space 中文 "double" and ''single'' \tail\'
+    $nested = Invoke-Git @('-c', 'alias.native-config=!git config --get bundle.probe', '-c', "bundle.probe=$nativeConfig", 'native-config')
+    Assert-Acceptance ($nested.stdout.TrimEnd("`r", "`n") -ceq $nativeConfig) 'Shell alias corrupted inherited config or failed to locate its native Git child.'
     foreach ($interpreter in @('sh', 'bash')) {
         $hook = "#!/bin/$interpreter`nprintf '%s\n' '$interpreter' > 'hook-$interpreter.marker'`n"
         Write-Utf8 (Join-Path $source '.git/hooks/pre-commit') $hook

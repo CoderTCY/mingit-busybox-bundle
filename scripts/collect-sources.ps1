@@ -148,7 +148,7 @@ function Read-SourceArchive([string]$Relative, [string]$LicensePrefix) {
             if ($entry.EntryType -in @([System.Formats.Tar.TarEntryType]::RegularFile, [System.Formats.Tar.TarEntryType]::V7RegularFile)) { [void]$materialized.Add($name) }
             if ($null -eq $entry.DataStream) { continue }
             $leaf = ($name -split '/')[-1]
-            if ($leaf -in @('.SRCINFO', 'PKGBUILD', '0001-core-shell.patch')) {
+            if ($leaf -in @('.SRCINFO', 'PKGBUILD', '0001-core-shell.patch', '0003-busybox-unicode.patch')) {
                 $buffer = [IO.MemoryStream]::new()
                 try {
                     $entry.DataStream.CopyTo($buffer)
@@ -328,12 +328,14 @@ Copy-SourceFile $versionsPath 'recipe/package-versions.txt' 'exporter-package-in
 Copy-SourceFile (Join-Path $PayloadRoot 'etc/libexec-moved.txt') 'recipe/libexec-moved.txt' 'exporter-relocations' | Out-Null
 foreach ($patch in $inputs.patches) { Copy-SourceFile (Join-Path $ProjectRoot $patch.path) "recipe/$($patch.path)" 'locked-project-patch' | Out-Null }
 Copy-SourceFile (Join-Path $BuildRoot 'work/package-recipe/PKGBUILD') 'recipe/PKGBUILD' 'adapted-package-recipe' | Out-Null
+Copy-SourceFile (Join-Path $BuildRoot 'work/busybox-package-recipe/PKGBUILD') 'recipe/busybox/PKGBUILD' 'adapted-busybox-package-recipe' | Out-Null
 Export-Commit $ProjectRoot $inputs.recipeCommit 'recipe/project.zip' 'project-recipe'
 Export-Commit (Join-Path $BuildRoot 'work/build-extra') $inputs.toolchain.buildExtraCommit 'recipe/build-extra.zip' 'https://github.com/git-for-windows/build-extra'
 Export-Commit (Join-Path $BuildRoot 'work/MINGW-packages') $inputs.toolchain.mingwPackagesCommit 'recipe/MINGW-packages.zip' 'https://github.com/git-for-windows/MINGW-packages'
 # This human-readable tree supplements (never replaces) this build's --allsource
 # archive, whose bare Git cache, wrappers and adapted PKGBUILD remain untouched.
 Export-Commit (Join-Path $BuildRoot 'work/package-recipe/git') $inputs.git.commit 'git/git-source.zip' 'https://github.com/git-for-windows/git'
+Export-Commit (Join-Path $BuildRoot 'work/busybox-package-recipe/busybox-w32') $inputs.toolchain.busybox.commit 'busybox/busybox-source.zip' 'https://github.com/git-for-windows/busybox-w32'
 
 $releaseCache = @{}
 $indexCache = @{}
@@ -426,7 +428,25 @@ foreach ($name in ($selected | Sort-Object)) {
         Copy-SourceFile (Join-Path $SdkRoot $license) "licenses/installed/$name/$license" "sdk-package:$name@$($package.version)" | Out-Null
     }
 }
-$customGitCount = 0
+$customPackages = @{
+    'mingw-w64-git' = @{
+        version = "$($inputs.git.packageVersion)-1"
+        commit = $inputs.git.commit
+        recipe = 'work/package-recipe/PKGBUILD'
+        commitRecord = 'work/git-source-commit.txt'
+        patch = '0001-core-shell.patch'
+        vcsSource = "git::git+https://github.com/git-for-windows/git.git#commit=$($inputs.git.commit)"
+    }
+    'mingw-w64-busybox' = @{
+        version = "$($inputs.toolchain.busybox.version).busyboxbundle.$($inputs.recipeCommit.Substring(0,12))-1"
+        commit = $inputs.toolchain.busybox.commit
+        recipe = 'work/busybox-package-recipe/PKGBUILD'
+        commitRecord = 'work/busybox-source-commit.txt'
+        patch = '0003-busybox-unicode.patch'
+        vcsSource = "busybox-w32::git+https://github.com/git-for-windows/busybox-w32.git#commit=$($inputs.toolchain.busybox.commit)"
+    }
+}
+$customSourceCount = 0
 foreach ($key in ($groups.Keys | Sort-Object)) {
     $group = @($groups[$key] | Sort-Object name)
     $base = $group[0].base; $version = $group[0].version
@@ -437,14 +457,15 @@ foreach ($key in ($groups.Keys | Sort-Object)) {
     $segment = [Uri]::EscapeDataString($version)
     $directory = "packages/$base/$segment"
     $relative = "$directory/$fileName"
-    if ($base -ceq 'mingw-w64-git') {
-        if ($version -cne "$($inputs.git.packageVersion)-1") { throw "Git package version is not this build: $version" }
+    if ($customPackages.ContainsKey($base)) {
+        $custom = $customPackages[$base]
+        if ($version -cne $custom.version) { throw "$base package version is not this build: $version" }
         $allsource = @(Get-ChildItem -LiteralPath (Join-Path $BuildRoot 'work/sources') -File | Where-Object Name -CEQ $fileName)
         if ($allsource.Count -ne 1) { throw "Missing this build's unique --allsource archive: $fileName" }
-        if ((Get-Content -LiteralPath (Join-Path $BuildRoot 'work/git-source-commit.txt') -Raw).Trim() -cne $inputs.git.commit) { throw 'Allsource build commit differs from inputs' }
+        if ((Get-Content -LiteralPath (Join-Path $BuildRoot $custom.commitRecord) -Raw).Trim() -cne $custom.commit) { throw "$base allsource build commit differs from inputs" }
         Copy-SourceFile $allsource[0].FullName $relative 'this-build:makepkg-mingw --allsource' | Out-Null
-        $origin = [ordered]@{ method = 'custom-allsource'; commit = $inputs.git.commit; recipeCommit = $inputs.recipeCommit }
-        $customGitCount++
+        $origin = [ordered]@{ method = 'custom-allsource'; commit = $custom.commit; recipeCommit = $inputs.recipeCommit }
+        $customSourceCount++
     }
     else {
         $origin = Find-IndexedSource @($group.name) $base $version $fileNames $directory
@@ -468,15 +489,15 @@ foreach ($key in ($groups.Keys | Sort-Object)) {
     }
     $archive = Read-SourceArchive $relative "licenses/sources/$base/$segment"
     $root = Assert-PackageArchive $archive $base $version
-    if ($base -ceq 'mingw-w64-git') {
-        if ($archive.hashes["$root/PKGBUILD"] -cne (Get-Sha256 (Join-Path $BuildRoot 'work/package-recipe/PKGBUILD'))) { throw 'Allsource PKGBUILD is not this build recipe' }
-        $corePatch = @($inputs.patches | Where-Object path -CEQ 'patches/0001-core-shell.patch')[0]
-        if ($archive.hashes["$root/0001-core-shell.patch"] -cne $corePatch.sha256) { throw 'Allsource core.shell patch does not match the locked patch' }
-        if ($archive.texts["$root/.SRCINFO"] -notmatch ('(?m)^\s*source\s*=\s*git::git\+https://github\.com/git-for-windows/git\.git#commit=' + [regex]::Escape($inputs.git.commit) + '\s*$')) { throw 'Allsource Git VCS source is not the locked commit' }
+    if ($customPackages.ContainsKey($base)) {
+        if ($archive.hashes["$root/PKGBUILD"] -cne (Get-Sha256 (Join-Path $BuildRoot $custom.recipe))) { throw "$base allsource PKGBUILD is not this build recipe" }
+        $sourcePatch = @($inputs.patches | Where-Object path -CEQ "patches/$($custom.patch)")[0]
+        if ($archive.hashes["$root/$($custom.patch)"] -cne $sourcePatch.sha256) { throw "$base allsource patch does not match the locked patch" }
+        if ($archive.texts["$root/.SRCINFO"] -notmatch ('(?m)^\s*source\s*=\s*' + [regex]::Escape($custom.vcsSource) + '\s*$')) { throw "$base allsource VCS source is not the locked commit" }
     }
     $sourcePackages.Add([ordered]@{ base = $base; version = $version; binaryPackages = @($group.name); declaredLicenses = @($group.licenses | Sort-Object -Unique); archive = $relative; sha256 = Get-Sha256 (Join-Path $OutputDirectory $relative); origin = $origin; extractedLicenses = @($archive.licenses | Sort-Object) })
 }
-if ($customGitCount -ne 1) { throw 'Payload has no unique custom Git source package' }
+if ($customSourceCount -ne $customPackages.Count) { throw 'Payload must include unique custom Git and BusyBox source packages' }
 
 $lfsRelative = "lfs/$($inputs.lfs.source.name)"
 Assert-RelativePath $lfsRelative
@@ -500,8 +521,9 @@ $manifest = [ordered]@{
     releaseTag = $inputs.releaseTag
     recipeCommit = $inputs.recipeCommit
     gitCommit = $inputs.git.commit
+    busyboxCommit = $inputs.toolchain.busybox.commit
     sourcePolicy = 'Exact SDK %BASE% + %VERSION%, all shipped file owners plus exporter inventory; no version substitutions; archives retain source caches and licenses.'
-    reconstruction = @('recipe/project.zip is the pinned project, including native helper, installer and build sources.', 'recipe/inputs.json and recipe/patches contain the exact inputs; recipe/PKGBUILD is the adapted recipe.', 'The custom Git package is this build makepkg --allsource output, including its bare VCS cache; git/git-source.zip additionally provides the unmodified pinned working tree.', 'recipe/build-extra.zip and recipe/MINGW-packages.zip are fixed upstream packaging source trees.', 'Dependency source archives retain their upstream PKGBUILD, .SRCINFO, source files and VCS caches. LFS includes its exact release vendor source archive.')
+    reconstruction = @('recipe/project.zip is the pinned project, including native helper, installer and build sources.', 'recipe/inputs.json and recipe/patches contain the exact inputs; recipe/PKGBUILD and recipe/busybox/PKGBUILD are the adapted recipes.', 'The custom Git and BusyBox packages are this build makepkg --allsource outputs, including their bare VCS caches; git/git-source.zip and busybox/busybox-source.zip additionally provide the unmodified pinned working trees.', 'recipe/build-extra.zip and recipe/MINGW-packages.zip are fixed upstream packaging source trees.', 'Dependency source archives retain their upstream PKGBUILD, .SRCINFO, source files and VCS caches. LFS includes its exact release vendor source archive.')
     packages = $sourcePackages.ToArray()
     lfs = [ordered]@{ tag = $inputs.lfs.tag; commit = $inputs.lfs.commit; source = $inputs.lfs.source; archive = $lfsRelative; extractedLicenses = @($lfsArchive.licenses | Sort-Object) }
     payloadOwnership = @($ownership | Sort-Object path)

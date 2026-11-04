@@ -1,0 +1,71 @@
+From: MinGit BusyBox Bundle maintainers
+Subject: [PATCH] Pin BusyBox source and preserve upstream packaging features
+
+Based on git-for-windows/MINGW-packages
+20a412e3b61c853fb3a290f02e78f59611d20342, maintained by
+Johannes Schindelin <johannes.schindelin@gmx.de>.
+Bundle integration changes: GPL-2.0-only.
+Keep upstream architecture configuration, build flags and hardlinked applets.
+Only the independently verified VCS commit uses SKIP. The native Makefile
+EXTRAVERSION override identifies this build without requiring tag/history data.
+---
+
+diff --git a/mingw-w64-busybox/PKGBUILD b/mingw-w64-busybox/PKGBUILD
+--- a/mingw-w64-busybox/PKGBUILD
++++ b/mingw-w64-busybox/PKGBUILD
+@@ -4,7 +4,8 @@ _realname=busybox
+ pkgbase=mingw-w64-${_realname}
+ pkgname=("${MINGW_PACKAGE_PREFIX}-${_realname}")
+ _ver_base=1.38.0
+-pkgver=1.38.0.21234.d8d8bb397
++: "${BUNDLE_BUSYBOX_VERSION:?missing pinned BusyBox version}" "${BUNDLE_RECIPE_COMMIT:?missing recipe commit}"
++pkgver=${BUNDLE_BUSYBOX_VERSION}.busyboxbundle.${BUNDLE_RECIPE_COMMIT:0:12}
+ pkgrel=1
+ pkgdesc="Windows port of BusyBox (mingw-w64)"
+ arch=('any')
+@@ -13,18 +14,18 @@ url="https://github.com/git-for-windows/busybox-w32"
+ license=('GPL2')
+ 
+ options=('!strip')
+-source=("git+https://github.com/git-for-windows/busybox-w32")
+-sha256sums=('SKIP')
+-
+-pkgver() {
+-  cd ${srcdir}/${_realname}-w32
+-  printf "%s.%s.%s" "$_ver_base" \
+-    "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
+-}
++source=("busybox-w32::git+https://github.com/git-for-windows/busybox-w32.git#commit=${BUNDLE_BUSYBOX_COMMIT:?missing BusyBox commit}"
++        '0003-busybox-unicode.patch')
++# prepare() independently verifies the VCS commit before applying the checked patch.
++sha256sums=('SKIP' "${BUNDLE_BUSYBOX_PATCH_SHA256:?missing BusyBox patch checksum}")
+ 
+ prepare() {
+   cd ${srcdir}/${_realname}-w32
+ 
++  test "$(git rev-parse HEAD)" = "${BUNDLE_BUSYBOX_COMMIT:?}" || return 1
++  git apply --check ../0003-busybox-unicode.patch || return 1
++  git apply ../0003-busybox-unicode.patch || return 1
++
+   rm -f .config
+ 
+   case "$CARCH" in
+@@ -64,7 +65,8 @@ build() {
+   esac
+ 
+   make clean
+-  make
++  # The native override avoids git-describe/history-dependent version discovery.
++  make EXTRAVERSION=".${pkgver#${_ver_base}.}"
+ }
+ 
+ package() {
+@@ -76,7 +78,7 @@ package() {
+     applets/install.sh
+ 
+   # install hardlinked applets into $MINGW_PREFIX/libexec/busybox/
+-  make busybox.links
++  make EXTRAVERSION=".${pkgver#${_ver_base}.}" busybox.links
+   sed -i "s|.*/|$MINGW_PREFIX/libexec/busybox/|" busybox.links
+ 
+   install -m0755 -d "${pkgdir}$MINGW_PREFIX/libexec/busybox"

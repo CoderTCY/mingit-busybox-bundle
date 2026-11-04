@@ -83,8 +83,9 @@ $oldLfs = Resolve-Lfs $previous
 $patches = @(Get-ChildItem -LiteralPath (Join-Path $root 'patches') -Filter '*.patch' -File -ErrorAction SilentlyContinue | Sort-Object Name | ForEach-Object {
     [ordered]@{ path = "patches/$($_.Name)"; sha256 = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant() }
 })
-if ($patches.Count -ne 2 -or $patches[0].path -cne 'patches/0001-core-shell.patch' -or $patches[1].path -cne 'patches/0002-package-inputs.patch') {
-    throw 'Both reviewed local patches are required'
+$expectedPatches = @('patches/0001-core-shell.patch', 'patches/0002-package-inputs.patch', 'patches/0003-busybox-unicode.patch', 'patches/0004-busybox-package-inputs.patch')
+if (($patches.path -join "`n") -cne ($expectedPatches -join "`n")) {
+    throw 'All four reviewed Git and BusyBox patches are required'
 }
 $inputs = [ordered]@{
     schemaVersion = 1

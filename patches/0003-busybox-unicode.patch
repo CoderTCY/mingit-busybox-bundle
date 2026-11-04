@@ -1,0 +1,39 @@
+From: MinGit BusyBox Bundle maintainers
+Subject: [PATCH] win32: query file ownership through the existing wide path
+
+Based on git-for-windows/busybox-w32
+ d8d8bb397f1e200ba5a871dc6aa4af819b23f32a.
+Upstream BusyBox-w32 is maintained by Ron Yorston, originally ported by
+Nguyễn Thái Ngọc Duy; Git for Windows carries additional downstream changes.
+Source: https://github.com/git-for-windows/busybox-w32
+Upstream: https://github.com/rmyorston/busybox-w32
+Bundle integration changes: GPL-2.0-only; upstream attribution is unchanged.
+
+The stat implementation already resolves file_name from UTF-8 into wpath
+and uses wide APIs for attributes and compressed size. Its READ_CONTROL
+handle still used CreateFileA, decoding the UTF-8 filename with the ANSI
+code page. For Chinese filenames this failed, selected the existing
+uid/gid zero fallback, and cleared other permissions. Nonadministrator ash
+then rejected otherwise executable native children. CI 41929624612 showed
+identical executable bytes and Windows owner/SDDL producing mode 755 for
+an ASCII filename but 750 for its Chinese sibling.
+
+Reuse wpath with CreateFileW. Retain READ_CONTROL, reparse-point handling,
+owner checks, failure behavior and all mingw64_defconfig features. No new
+conversion, allocation, manifest requirement or permission bypass is needed.
+The existing real Unicode-path clone, hook and LFS gates remain unchanged.
+---
+
+diff --git a/win32/mingw.c b/win32/mingw.c
+index aaf041e..abad6f2 100644
+--- a/win32/mingw.c
++++ b/win32/mingw.c
+@@ -1113,7 +1113,7 @@ static int do_lstat(int follow, const char *file_name, struct mingw_stat *buf)
+ 			flags = FILE_FLAG_BACKUP_SEMANTICS;
+ 			if (S_ISLNK(buf->st_mode))
+ 				flags |= FILE_FLAG_OPEN_REPARSE_POINT;
+-			fh = CreateFile(file_name, READ_CONTROL, 0, NULL,
++			fh = CreateFileW(wpath, READ_CONTROL, 0, NULL,
+ 								OPEN_EXISTING, flags, NULL);
+ 			if (fh != INVALID_HANDLE_VALUE) {
+ 				if (GetFileInformationByHandle(fh, &hdata)) {
