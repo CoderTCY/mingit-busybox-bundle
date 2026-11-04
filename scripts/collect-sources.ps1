@@ -245,7 +245,12 @@ foreach ($package in ($packages.Values | Sort-Object name)) {
     $filesPath = Join-Path $package.metadata 'files'
     if (-not (Test-Path -LiteralPath $filesPath)) { throw "Missing pacman file inventory for $($package.name)" }
     $sections = Read-PacmanSections $filesPath
-    if (-not $sections.ContainsKey('FILES')) { throw "No %FILES% for $($package.name)" }
+    if (-not $sections.ContainsKey('FILES')) {
+        # Pacman represents a fileless metapackage with an empty files record.
+        # Every actual payload path still has to resolve to an owner below.
+        if ([IO.File]::ReadAllText($filesPath).Trim().Length -ne 0) { throw "Invalid file inventory for $($package.name)" }
+        continue
+    }
     $package.files = $sections.FILES.ToArray()
     foreach ($path in $package.files) {
         if ($neededPaths.Contains($path)) {
