@@ -8,6 +8,8 @@ param(
 )
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+# This helper runs in inbox Windows PowerShell, not the parent's PowerShell 7.
+$env:PSModulePath = [IO.Path]::Combine($PSHOME, 'Modules')
 Add-Type -AssemblyName UIAutomationClient
 Add-Type -AssemblyName UIAutomationTypes
 Add-Type -AssemblyName System.Drawing

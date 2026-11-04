@@ -53,7 +53,7 @@ try {
     }
     if ($UiEvidencePath) { $parameters.UiEvidencePath = Join-Path $ui 'evidence.json' }
     $launch = @{ script = Join-Path $scripts 'smoke-installer.ps1'; parameters = $parameters }
-    $encodedData = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes(($launch | ConvertTo-Json -Depth 6 -Compress)))
+    Write-Utf8 (Join-Path $artifacts 'launch.json') ($launch | ConvertTo-Json -Depth 6)
     $bootstrap = @'
 $ErrorActionPreference = 'Stop'
 $env:CI = 'true'
@@ -70,8 +70,22 @@ $env:TEMP = Join-Path $env:LOCALAPPDATA 'Temp'
 $env:TMP = $env:TEMP
 [IO.Directory]::CreateDirectory($env:TEMP) | Out-Null
 '@
-    $command = $bootstrap + "`n" + '$launch = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String(''' + $encodedData + ''')) | ConvertFrom-Json -AsHashtable; try { $parameters = $launch.parameters; & $launch.script @parameters; exit 0 } catch { [Console]::Error.WriteLine($_.Exception.ToString()); exit 1 }'
-    $encodedCommand = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($command))
+    # CreateProcessWithLogonW limits its command line to 1024 characters.
+    # Put the bootstrap and data in files rather than an oversized Base64 argument.
+    $launcher = Join-Path $artifacts 'run-acceptance.ps1'
+    $bootstrap += "`n" + @'
+$launch = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'launch.json') -Raw | ConvertFrom-Json -AsHashtable
+try {
+    $parameters = $launch.parameters
+    & $launch.script @parameters
+    exit 0
+} catch {
+    [Console]::Error.WriteLine($_.Exception.ToString())
+    exit 1
+}
+'@
+    Write-Utf8 $launcher $bootstrap
+    $childArguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $launcher)
     $pwsh = Join-Path $PSHOME 'pwsh.exe'
     if ($Scope -eq 'CurrentUser') {
         $name = 'mgb' + [Guid]::NewGuid().ToString('N').Substring(0, 12)
@@ -88,12 +102,12 @@ $env:TMP = $env:TEMP
         $acl.AddAccessRule($rule)
         Set-Acl -LiteralPath $ScratchRoot -AclObject $acl
         $credential = [Management.Automation.PSCredential]::new("$env:COMPUTERNAME\$name", $password)
-        $child = Start-Process -FilePath $pwsh -ArgumentList @('-NoProfile', '-EncodedCommand', $encodedCommand) -Credential $credential -LoadUserProfile -WorkingDirectory $artifacts -RedirectStandardOutput (Join-Path $ScratchRoot 'restricted-stdout.log') -RedirectStandardError (Join-Path $ScratchRoot 'restricted-stderr.log') -PassThru
+        $child = Start-Process -FilePath $pwsh -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', ('"' + $launcher + '"')) -Credential $credential -LoadUserProfile -WorkingDirectory $artifacts -RedirectStandardOutput (Join-Path $ScratchRoot 'restricted-stdout.log') -RedirectStandardError (Join-Path $ScratchRoot 'restricted-stderr.log') -PassThru
         if (-not $child.WaitForExit(3600000)) { $child.Kill($true); $child.WaitForExit(); throw 'Restricted account acceptance exceeded one hour.' }
         $report.childExitCode = $child.ExitCode
         Assert-Acceptance ($child.ExitCode -eq 0) "Restricted CurrentUser acceptance failed: exit $($child.ExitCode). See restricted-stderr.log and lifecycle evidence."
     } else {
-        $result = Invoke-AcceptanceProcess -File $pwsh -Arguments @('-NoProfile', '-EncodedCommand', $encodedCommand) -Directory $artifacts -TimeoutSeconds 3600
+        $result = Invoke-AcceptanceProcess -File $pwsh -Arguments $childArguments -Directory $artifacts -TimeoutSeconds 3600
         $report.childExitCode = $result.exit
     }
     $evidence = Get-Content -LiteralPath (Join-Path $parameters.ScratchRoot 'installer-evidence.json') -Raw | ConvertFrom-Json

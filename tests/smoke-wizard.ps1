@@ -11,6 +11,8 @@ param(
 )
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+# Do not autoload PowerShell 7 modules inherited through PSModulePath into 5.1.
+$env:PSModulePath = [IO.Path]::Combine($PSHOME, 'Modules')
 if ($env:CI -ne 'true' -and -not $AllowDesktopObservation) { throw 'Wizard automation requires disposable CI or explicit -AllowDesktopObservation on the local desktop.' }
 if (Test-Path -LiteralPath $ScratchRoot) { throw 'Wizard ScratchRoot must be new.' }
 $null = [IO.Directory]::CreateDirectory($ScratchRoot)
