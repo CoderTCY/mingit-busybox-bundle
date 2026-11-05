@@ -30,6 +30,7 @@ $env:BUNDLE_PROJECT_ROOT = $root
 $env:BUNDLE_OUTPUT_ROOT = $OutputRoot
 $env:BUNDLE_INPUTS_PATH = $InputsPath
 Invoke-BundleNative $bash @('--login', (Join-Path $PSScriptRoot 'build-git.sh'), $inputs.git.tag, $inputs.git.commit, $inputs.recipeCommit, $root, $OutputRoot)
+& "$PSScriptRoot/build-lfs.ps1" -InputsPath $InputsPath -SdkRoot $SdkRoot -OutputRoot $OutputRoot
 & "$PSScriptRoot/assemble-payload.ps1" -InputsPath $InputsPath -SdkRoot $SdkRoot -OutputRoot $OutputRoot
 & "$PSScriptRoot/compile-installer.ps1" -InputsPath $InputsPath -OutputRoot $OutputRoot
 

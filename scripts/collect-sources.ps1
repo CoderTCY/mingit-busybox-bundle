@@ -47,6 +47,13 @@ function Copy-SourceFile([string]$Source, [string]$Relative, [string]$Origin) {
     $artifacts.Add([ordered]@{ path = $Relative; origin = $Origin; sha256 = Get-Sha256 $destination })
     return $Relative
 }
+function Copy-LockedBuildArchive($Asset, [string]$Relative) {
+    if ($Asset.sha256 -notmatch '^[0-9a-f]{64}$') { throw 'Build source archive has no locked SHA-256' }
+    $cached = Join-Path $BuildRoot "work/downloads/$($Asset.name)"
+    if ((Get-Sha256 $cached) -cne $Asset.sha256) { throw "Build source cache differs from locked input: $($Asset.name)" }
+    Copy-SourceFile $cached $Relative $Asset.url | Out-Null
+    $downloads.Add([ordered]@{ path = $Relative; url = $Asset.url; sha256 = $Asset.sha256; expectedSha256 = $Asset.sha256; acquiredBy = 'verified-build-cache' })
+}
 function Invoke-Git([string[]]$Arguments) {
     $result = @(& $git -c core.autocrlf=false -c core.eol=lf @Arguments)
     if ($LASTEXITCODE -ne 0) { throw "Source git command failed ($LASTEXITCODE): $($Arguments -join ' ')" }
@@ -148,7 +155,7 @@ function Read-SourceArchive([string]$Relative, [string]$LicensePrefix) {
             if ($entry.EntryType -in @([System.Formats.Tar.TarEntryType]::RegularFile, [System.Formats.Tar.TarEntryType]::V7RegularFile)) { [void]$materialized.Add($name) }
             if ($null -eq $entry.DataStream) { continue }
             $leaf = ($name -split '/')[-1]
-            if ($leaf -in @('.SRCINFO', 'PKGBUILD', '0001-core-shell.patch', '0003-busybox-unicode.patch')) {
+            if ($leaf -in @('.SRCINFO', 'PKGBUILD', 'VERSION', '0001-core-shell.patch', '0003-busybox-unicode.patch')) {
                 $buffer = [IO.MemoryStream]::new()
                 try {
                     $entry.DataStream.CopyTo($buffer)
@@ -285,8 +292,12 @@ foreach ($file in $payloadFiles) {
         $ownership.Add([ordered]@{ path = $relative; sha256 = $hash; source = 'sdk-package-post-install'; package = $name; version = $packages[$name].version; generatorSha256 = Get-Sha256 $generator })
         continue
     }
+    if ($relative -ceq 'ucrt64/share/licenses/git-lfs/go-LICENSE') {
+        $ownership.Add([ordered]@{ path = $relative; sha256 = $hash; source = 'go-runtime'; version = $inputs.toolchain.go.version })
+        continue
+    }
     if ($relative -ceq 'ucrt64/bin/git-lfs.exe' -or $relative.StartsWith('ucrt64/share/doc/git-lfs/', [StringComparison]::Ordinal) -or $relative.StartsWith('ucrt64/share/licenses/git-lfs/', [StringComparison]::Ordinal)) {
-        $ownership.Add([ordered]@{ path = $relative; sha256 = $hash; source = 'git-lfs'; commit = $inputs.lfs.commit })
+        $ownership.Add([ordered]@{ path = $relative; sha256 = $hash; source = 'custom-git-lfs'; commit = $inputs.lfs.commit; vendor = $inputs.lfs.vendor; recipeCommit = $inputs.recipeCommit })
         continue
     }
     $sourcePath = $relative
@@ -329,6 +340,8 @@ Copy-SourceFile (Join-Path $PayloadRoot 'etc/libexec-moved.txt') 'recipe/libexec
 foreach ($patch in $inputs.patches) { Copy-SourceFile (Join-Path $ProjectRoot $patch.path) "recipe/$($patch.path)" 'locked-project-patch' | Out-Null }
 Copy-SourceFile (Join-Path $BuildRoot 'work/package-recipe/PKGBUILD') 'recipe/PKGBUILD' 'adapted-package-recipe' | Out-Null
 Copy-SourceFile (Join-Path $BuildRoot 'work/busybox-package-recipe/PKGBUILD') 'recipe/busybox/PKGBUILD' 'adapted-busybox-package-recipe' | Out-Null
+Copy-SourceFile (Join-Path $BuildRoot 'work/lfs-build/build.json') 'recipe/lfs-build.json' 'custom-lfs-build-record' | Out-Null
+Copy-SourceFile (Join-Path $BuildRoot 'work/lfs-build/documentation-toolchain.txt') 'recipe/lfs-documentation-toolchain.txt' 'sdk-documentation-tools' | Out-Null
 Export-Commit $ProjectRoot $inputs.recipeCommit 'recipe/project.zip' 'project-recipe'
 Export-Commit (Join-Path $BuildRoot 'work/build-extra') $inputs.toolchain.buildExtraCommit 'recipe/build-extra.zip' 'https://github.com/git-for-windows/build-extra'
 Export-Commit (Join-Path $BuildRoot 'work/MINGW-packages') $inputs.toolchain.mingwPackagesCommit 'recipe/MINGW-packages.zip' 'https://github.com/git-for-windows/MINGW-packages'
@@ -502,7 +515,7 @@ if ($customSourceCount -ne $customPackages.Count) { throw 'Payload must include 
 $lfsRelative = "lfs/$($inputs.lfs.source.name)"
 Assert-RelativePath $lfsRelative
 if ($inputs.lfs.source.sha256 -notmatch '^[0-9a-f]{64}$') { throw 'LFS vendor source has no locked SHA-256' }
-Receive-Source $inputs.lfs.source.url $lfsRelative $inputs.lfs.source.sha256 | Out-Null
+Copy-LockedBuildArchive $inputs.lfs.source $lfsRelative
 $lfsArchive = Read-SourceArchive $lfsRelative 'licenses/lfs'
 $lfsRoots = @($lfsArchive.names | Where-Object { $_ -match '^(?:[^/]+/)?LICENSE\.md$' })
 if ($lfsRoots.Count -ne 1) { throw 'Locked LFS source has no unique root license' }
@@ -510,6 +523,32 @@ $lfsPrefix = $lfsRoots[0].Substring(0, $lfsRoots[0].Length - 'LICENSE.md'.Length
 if (-not @($lfsArchive.names | Where-Object { $_.StartsWith("${lfsPrefix}vendor/", [StringComparison]::Ordinal) -and $_ -match '/[^/]+/[^/]+$' }).Count) { throw 'Locked LFS source is missing vendored dependencies' }
 # Its pinned official SHA-256 establishes version identity, not an assumed tar
 # prefix convention (release archives need not use GitHub's auto-source name).
+$lfsBuild = Get-Content -LiteralPath (Join-Path $BuildRoot 'work/lfs-build/build.json') -Raw | ConvertFrom-Json
+$lfsPatch = @($inputs.patches | Where-Object path -CEQ 'patches/0005-lfs-core-shell.patch')[0]
+if ($lfsBuild.commit -cne $inputs.lfs.commit -or $lfsBuild.vendor -cne $inputs.lfs.vendor -or $lfsBuild.recipeCommit -cne $inputs.recipeCommit -or
+    $lfsBuild.source.sha256 -cne $inputs.lfs.source.sha256 -or $lfsBuild.patch.sha256 -cne $lfsPatch.sha256 -or
+    $lfsBuild.binarySha256 -cne (Get-Sha256 (Join-Path $PayloadRoot 'ucrt64/bin/git-lfs.exe'))) { throw 'Shipped LFS does not match its custom source build record' }
+if (($lfsBuild.go | ConvertTo-Json -Depth 10 -Compress) -cne ($inputs.toolchain.go | ConvertTo-Json -Depth 10 -Compress) -or
+    ($lfsBuild.goversioninfo | ConvertTo-Json -Depth 10 -Compress) -cne ($inputs.toolchain.goversioninfo | ConvertTo-Json -Depth 10 -Compress)) { throw 'LFS build toolchain differs from locked source inputs' }
+
+$goRelative = "go/$($inputs.toolchain.go.source.name)"
+Copy-LockedBuildArchive $inputs.toolchain.go.source $goRelative
+$goArchive = Read-SourceArchive $goRelative 'licenses/go'
+if (($goArchive.texts['go/VERSION'] -split '\r?\n')[0] -cne "go$($inputs.toolchain.go.version)") { throw 'Go runtime source version differs from the compiler' }
+$goLicense = Join-Path $OutputDirectory 'licenses/go/go/LICENSE'
+if ((Get-Sha256 $goLicense) -cne (Get-Sha256 (Join-Path $PayloadRoot 'ucrt64/share/licenses/git-lfs/go-LICENSE'))) { throw 'Shipped Go runtime license differs from its exact source' }
+
+$generatorSources = @()
+foreach ($generator in @($inputs.toolchain.goversioninfo) + @($inputs.toolchain.goversioninfo.dependencies)) {
+    $relative = "build-tools/$($generator.source.name)"
+    Copy-LockedBuildArchive $generator.source $relative
+    $generatorSources += [ordered]@{ module = $generator.module; version = $generator.version; source = $generator.source; archive = $relative }
+}
+$generatorRoot = Join-Path $BuildRoot 'work/lfs-build/generator-source'
+foreach ($notice in Get-ChildItem -LiteralPath $generatorRoot -File -Recurse | Where-Object { $_.Name -match '(?i)^(licen[cs]e|notice|copying|copyright|patents)([._-].*)?$' }) {
+    $relative = [IO.Path]::GetRelativePath($generatorRoot, $notice.FullName).Replace('\', '/')
+    Copy-SourceFile $notice.FullName "licenses/build-tools/$relative" 'locked-lfs-resource-generator-source' | Out-Null
+}
 
 # Inventory hashes include copied notices, SDK evidence and downloaded API/index
 # JSON. The manifest cannot hash itself; SHA256SUMS below covers it separately.
@@ -523,9 +562,11 @@ $manifest = [ordered]@{
     gitCommit = $inputs.git.commit
     busyboxCommit = $inputs.toolchain.busybox.commit
     sourcePolicy = 'Exact SDK %BASE% + %VERSION%, all shipped file owners plus exporter inventory; no version substitutions; archives retain source caches and licenses.'
-    reconstruction = @('recipe/project.zip is the pinned project, including native helper, installer and build sources.', 'recipe/inputs.json and recipe/patches contain the exact inputs; recipe/PKGBUILD and recipe/busybox/PKGBUILD are the adapted recipes.', 'The custom Git and BusyBox packages are this build makepkg --allsource outputs, including their bare VCS caches; git/git-source.zip and busybox/busybox-source.zip additionally provide the unmodified pinned working trees.', 'recipe/build-extra.zip and recipe/MINGW-packages.zip are fixed upstream packaging source trees.', 'Dependency source archives retain their upstream PKGBUILD, .SRCINFO, source files and VCS caches. LFS includes its exact release vendor source archive.')
+    reconstruction = @('recipe/project.zip is the pinned project, including native helper, installer and build sources.', 'recipe/inputs.json and recipe/patches contain all five patches and exact inputs; recipe/PKGBUILD and recipe/busybox/PKGBUILD are the adapted recipes.', 'The custom Git and BusyBox packages are this build makepkg --allsource outputs, including their bare VCS caches; git/git-source.zip and busybox/busybox-source.zip additionally provide the unmodified pinned working trees.', 'recipe/build-extra.zip and recipe/MINGW-packages.zip are fixed upstream packaging source trees.', 'Dependency source archives retain their upstream PKGBUILD, .SRCINFO, source files and VCS caches.', 'Custom LFS is rebuilt from its pristine release vendor archive plus patch 0005; recipe/lfs-build.json records the exact binary, source, generated-resource tools and Go compiler. Matching Go runtime source and resource-generator sources are included under go/ and build-tools/.')
     packages = $sourcePackages.ToArray()
-    lfs = [ordered]@{ tag = $inputs.lfs.tag; commit = $inputs.lfs.commit; source = $inputs.lfs.source; archive = $lfsRelative; extractedLicenses = @($lfsArchive.licenses | Sort-Object) }
+    lfs = [ordered]@{ tag = $inputs.lfs.tag; commit = $inputs.lfs.commit; vendor = $inputs.lfs.vendor; source = $inputs.lfs.source; archive = $lfsRelative; patch = $lfsPatch; buildRecord = 'recipe/lfs-build.json'; extractedLicenses = @($lfsArchive.licenses | Sort-Object) }
+    go = [ordered]@{ version = $inputs.toolchain.go.version; source = $inputs.toolchain.go.source; archive = $goRelative; extractedLicenses = @($goArchive.licenses | Sort-Object) }
+    lfsBuildTools = $generatorSources
     payloadOwnership = @($ownership | Sort-Object path)
     downloads = @($downloads | Sort-Object path)
     lookups = @($lookups | Sort-Object url)

@@ -34,12 +34,14 @@ $fixturePayload = Join-Path $work 'upgrade-payload'
 if (Test-Path -LiteralPath $fixturePayload) { throw 'Upgrade fixture payload already exists' }
 [IO.Directory]::CreateDirectory($fixturePayload) | Out-Null
 Get-ChildItem -LiteralPath $payload -Force | Copy-Item -Destination $fixturePayload -Recurse -Force
-Set-BundleLfs -Lfs $older -Payload $fixturePayload -Work $work
+$fixtureComponent = Get-BundleLfsRelease -Lfs $older -Work $work
+Set-BundleLfs -Lfs $older -Payload $fixturePayload -Work $work -BinaryPath (Join-Path $fixtureComponent 'git-lfs.exe') -DocumentationPath $fixtureComponent
 $fixtureManifest = Get-Content -LiteralPath (Join-Path $fixturePayload 'build-manifest.json') -Raw | ConvertFrom-Json -AsHashtable
 $fixtureManifest.inputs.lfs = $older
 $fixtureManifest.inputs.releaseTag = 'gfw-{0}-lfs-{1}-r{2}' -f $inputs.git.tag.Substring(1), $older.version, $inputs.recipeCommit.Substring(0,12)
 $fixtureManifest.inputs.appVersion = '{0}+lfs.{1}.r{2}' -f $inputs.git.packageVersion, $older.version, $inputs.recipeCommit.Substring(0,12)
 $fixtureManifest.components.lfs = $older
+[void]$fixtureManifest.components.Remove('lfsBuild')
 $fixtureManifest.isUpgradeFixture = $true
 Write-BundlePayloadManifest -Payload $fixturePayload -Manifest $fixtureManifest
 $fixtureOutput = Join-Path $work 'fixtures'

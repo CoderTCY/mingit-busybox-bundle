@@ -1,0 +1,784 @@
+From: MinGit BusyBox Bundle maintainers
+Subject: [PATCH] Windows: use Git's configured shell for LFS subprocesses
+
+Based on git-lfs/git-lfs v3.8.1,
+ a662a6dbfedf706cfa9fc7a5b7bcc7ba2e2c8a65.
+Source: https://github.com/git-lfs/git-lfs
+Upstream and these component modifications: MIT.
+Copyright (c) 2014- GitHub, Inc. and Git LFS contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+Ask Git for GIT_SHELL_PATH on Windows so core.shell and runtime prefix
+resolution stay authoritative. Preserve its Unicode/spaced path as a single
+executable name, normalize path separators, and propagate lookup errors.
+Never substitute inherited SHELL or a host sh. Non-Windows keeps normal sh.
+Serialize and cache the result for the current working directory and cached
+subprocess environment generation; clone directory changes and environment
+resets invalidate it. Preserve command quoting and existing process lifecycle.
+
+Propagate errors through custom transfers and both SSH authentication and
+transfer construction. Remove incidental formatter/sh-wiring tests, retaining
+independent quoting, SSH option, multiplexing, and injection-security contracts.
+This patch does not change the upstream Version constant or license files.
+Apply with git apply -p1 in the extracted same-version vendor source root.
+---
+
+diff --git a/lfshttp/ssh.go b/lfshttp/ssh.go
+index 01e3202..e0f6ba1 100644
+--- a/lfshttp/ssh.go
++++ b/lfshttp/ssh.go
+@@ -145,7 +145,10 @@ func (c *sshAuthClient) Resolve(e Endpoint, method string) (sshAuthResponse, err
+ 		return res, nil
+ 	}
+ 
+-	exe, args, _, _ := ssh.GetLFSExeAndArgs(c.os, c.git, &e.SSHMetadata, "git-lfs-authenticate", endpointOperation(e, method), false, "")
++	exe, args, _, _, err := ssh.GetLFSExeAndArgs(c.os, c.git, &e.SSHMetadata, "git-lfs-authenticate", endpointOperation(e, method), false, "")
++	if err != nil {
++		return res, err
++	}
+ 	cmd, err := subprocess.ExecCommand(exe, args...)
+ 	if err != nil {
+ 		return res, err
+diff --git a/lfshttp/ssh_test.go b/lfshttp/ssh_test.go
+index 309f0a9..92c74e3 100644
+--- a/lfshttp/ssh_test.go
++++ b/lfshttp/ssh_test.go
+@@ -10,6 +10,7 @@ import (
+ 
+ 	"github.com/git-lfs/git-lfs/v3/errors"
+ 	sshp "github.com/git-lfs/git-lfs/v3/ssh"
++	"github.com/git-lfs/git-lfs/v3/subprocess"
+ 	"github.com/stretchr/testify/assert"
+ 	"github.com/stretchr/testify/require"
+ )
+@@ -274,7 +275,11 @@ func TestSSHResolveFailsForOtherErrors(t *testing.T) {
+ // that tests can obtain a real *exec.ExitError.
+ func exitErrorWithCode(t *testing.T, code int) error {
+ 	t.Helper()
+-	err := exec.Command("sh", "-c", fmt.Sprintf("exit %d", code)).Run()
++	name, args, err := subprocess.FormatForShell("exit", fmt.Sprintf("%d", code))
++	require.NoError(t, err)
++	cmd, err := subprocess.ExecCommand(name, args...)
++	require.NoError(t, err)
++	err = cmd.Run()
+ 	var exitErr *exec.ExitError
+ 	require.True(t, goerrors.As(err, &exitErr))
+ 	require.Equal(t, code, exitErr.ExitCode())
+diff --git a/ssh/connection.go b/ssh/connection.go
+index 8cd3726..0200b11 100644
+--- a/ssh/connection.go
++++ b/ssh/connection.go
+@@ -43,7 +43,10 @@ func NewSSHTransfer(osEnv config.Environment, gitEnv config.Environment, meta *S
+ func startConnection(id int, osEnv config.Environment, gitEnv config.Environment, meta *SSHMetadata, operation string, multiplexControlPath string) (conn *PktlineConnection, multiplexing bool, controlPath string, err error) {
+ 	tracerx.Printf("spawning pure SSH connection (#%d)", id)
+ 	var errbuf bytes.Buffer
+-	exe, args, multiplexing, controlPath := GetLFSExeAndArgs(osEnv, gitEnv, meta, "git-lfs-transfer", operation, true, multiplexControlPath)
++	exe, args, multiplexing, controlPath, err := GetLFSExeAndArgs(osEnv, gitEnv, meta, "git-lfs-transfer", operation, true, multiplexControlPath)
++	if err != nil {
++		return nil, false, "", err
++	}
+ 	cmd, err := subprocess.ExecCommand(exe, args...)
+ 	if err != nil {
+ 		return nil, false, "", err
+diff --git a/ssh/ssh.go b/ssh/ssh.go
+index 401e7a0..d2838ef 100644
+--- a/ssh/ssh.go
++++ b/ssh/ssh.go
+@@ -29,19 +29,19 @@ type SSHMetadata struct {
+ 	Path        string
+ }
+ 
+-func FormatArgs(cmd string, args []string, needShell bool) (string, []string) {
++func FormatArgs(cmd string, args []string, needShell bool) (string, []string, error) {
+ 	if !needShell {
+-		return cmd, args
++		return cmd, args, nil
+ 	}
+ 
+ 	return subprocess.FormatForShellQuotedArgs(cmd, args)
+ }
+ 
+-func GetLFSExeAndArgs(osEnv config.Environment, gitEnv config.Environment, meta *SSHMetadata, command, operation string, multiplexDesired bool, multiplexControlPath string) (exe string, args []string, multiplexing bool, controlPath string) {
++func GetLFSExeAndArgs(osEnv config.Environment, gitEnv config.Environment, meta *SSHMetadata, command, operation string, multiplexDesired bool, multiplexControlPath string) (exe string, args []string, multiplexing bool, controlPath string, err error) {
+ 	exe, args, needShell, multiplexing, controlPath := GetExeAndArgs(osEnv, gitEnv, meta, multiplexDesired, multiplexControlPath)
+ 	args = append(args, strings.Join(subprocess.ShellQuote([]string{command, meta.Path, operation}), " "))
+-	exe, args = FormatArgs(exe, args, needShell)
+-	return exe, args, multiplexing, controlPath
++	exe, args, err = FormatArgs(exe, args, needShell)
++	return exe, args, multiplexing, controlPath, err
+ }
+ 
+ // Parse command, and if it looks like a valid command, return the ssh binary
+diff --git a/ssh/ssh_test.go b/ssh/ssh_test.go
+index dd42d57..7c3da63 100644
+--- a/ssh/ssh_test.go
++++ b/ssh/ssh_test.go
+@@ -19,14 +19,16 @@ func TestSSHGetLFSExeAndArgs(t *testing.T) {
+ 	meta.UserAndHost = "user@foo.com"
+ 	meta.Path = "user/repo"
+ 
+-	exe, args, _, _ := ssh.GetLFSExeAndArgs(cli.OSEnv(), cli.GitEnv(), &meta, "git-lfs-authenticate", "download", false, "")
++	exe, args, _, _, err := ssh.GetLFSExeAndArgs(cli.OSEnv(), cli.GitEnv(), &meta, "git-lfs-authenticate", "download", false, "")
++	require.NoError(t, err)
+ 	assert.Equal(t, "ssh", exe)
+ 	assert.Equal(t, []string{
+ 		"user@foo.com",
+ 		"git-lfs-authenticate user/repo download",
+ 	}, args)
+ 
+-	exe, args, _, _ = ssh.GetLFSExeAndArgs(cli.OSEnv(), cli.GitEnv(), &meta, "git-lfs-authenticate", "upload", false, "")
++	exe, args, _, _, err = ssh.GetLFSExeAndArgs(cli.OSEnv(), cli.GitEnv(), &meta, "git-lfs-authenticate", "upload", false, "")
++	require.NoError(t, err)
+ 	assert.Equal(t, "ssh", exe)
+ 	assert.Equal(t, []string{
+ 		"user@foo.com",
+@@ -35,7 +37,8 @@ func TestSSHGetLFSExeAndArgs(t *testing.T) {
+ 
+ 	meta.Path = "user/repo with spaces"
+ 
+-	exe, args, _, _ = ssh.GetLFSExeAndArgs(cli.OSEnv(), cli.GitEnv(), &meta, "git-lfs-authenticate", "upload", false, "")
++	exe, args, _, _, err = ssh.GetLFSExeAndArgs(cli.OSEnv(), cli.GitEnv(), &meta, "git-lfs-authenticate", "upload", false, "")
++	require.NoError(t, err)
+ 	assert.Equal(t, "ssh", exe)
+ 	assert.Equal(t, []string{
+ 		"user@foo.com",
+@@ -44,7 +47,8 @@ func TestSSHGetLFSExeAndArgs(t *testing.T) {
+ 
+ 	meta.Path = "user/repo;with;semicolons"
+ 
+-	exe, args, _, _ = ssh.GetLFSExeAndArgs(cli.OSEnv(), cli.GitEnv(), &meta, "git-lfs-authenticate", "upload", false, "")
++	exe, args, _, _, err = ssh.GetLFSExeAndArgs(cli.OSEnv(), cli.GitEnv(), &meta, "git-lfs-authenticate", "upload", false, "")
++	require.NoError(t, err)
+ 	assert.Equal(t, "ssh", exe)
+ 	assert.Equal(t, []string{
+ 		"user@foo.com",
+@@ -53,7 +57,8 @@ func TestSSHGetLFSExeAndArgs(t *testing.T) {
+ 
+ 	meta.Path = "user/repo&with&ampersands"
+ 
+-	exe, args, _, _ = ssh.GetLFSExeAndArgs(cli.OSEnv(), cli.GitEnv(), &meta, "git-lfs-authenticate", "upload", false, "")
++	exe, args, _, _, err = ssh.GetLFSExeAndArgs(cli.OSEnv(), cli.GitEnv(), &meta, "git-lfs-authenticate", "upload", false, "")
++	require.NoError(t, err)
+ 	assert.Equal(t, "ssh", exe)
+ 	assert.Equal(t, []string{
+ 		"user@foo.com",
+@@ -62,7 +67,8 @@ func TestSSHGetLFSExeAndArgs(t *testing.T) {
+ 
+ 	meta.Path = "user/repo|with|verticalbars"
+ 
+-	exe, args, _, _ = ssh.GetLFSExeAndArgs(cli.OSEnv(), cli.GitEnv(), &meta, "git-lfs-authenticate", "upload", false, "")
++	exe, args, _, _, err = ssh.GetLFSExeAndArgs(cli.OSEnv(), cli.GitEnv(), &meta, "git-lfs-authenticate", "upload", false, "")
++	require.NoError(t, err)
+ 	assert.Equal(t, "ssh", exe)
+ 	assert.Equal(t, []string{
+ 		"user@foo.com",
+@@ -71,7 +77,8 @@ func TestSSHGetLFSExeAndArgs(t *testing.T) {
+ 
+ 	meta.Path = "user/repo\nwith\nlinefeeds"
+ 
+-	exe, args, _, _ = ssh.GetLFSExeAndArgs(cli.OSEnv(), cli.GitEnv(), &meta, "git-lfs-authenticate", "upload", false, "")
++	exe, args, _, _, err = ssh.GetLFSExeAndArgs(cli.OSEnv(), cli.GitEnv(), &meta, "git-lfs-authenticate", "upload", false, "")
++	require.NoError(t, err)
+ 	assert.Equal(t, "ssh", exe)
+ 	assert.Equal(t, []string{
+ 		"user@foo.com",
+@@ -80,7 +87,8 @@ func TestSSHGetLFSExeAndArgs(t *testing.T) {
+ 
+ 	meta.Path = "user/repo'with'singlequotes"
+ 
+-	exe, args, _, _ = ssh.GetLFSExeAndArgs(cli.OSEnv(), cli.GitEnv(), &meta, "git-lfs-authenticate", "upload", false, "")
++	exe, args, _, _, err = ssh.GetLFSExeAndArgs(cli.OSEnv(), cli.GitEnv(), &meta, "git-lfs-authenticate", "upload", false, "")
++	require.NoError(t, err)
+ 	assert.Equal(t, "ssh", exe)
+ 	assert.Equal(t, []string{
+ 		"user@foo.com",
+@@ -98,7 +106,7 @@ func TestSSHGetExeAndArgsSsh(t *testing.T) {
+ 	meta.UserAndHost = "user@foo.com"
+ 
+ 	exe, args, needShell, _, _ := ssh.GetExeAndArgs(cli.OSEnv(), cli.GitEnv(), &meta, false, "")
+-	exe, args = ssh.FormatArgs(exe, args, needShell)
++	assert.False(t, needShell)
+ 	assert.Equal(t, "ssh", exe)
+ 	assert.Equal(t, []string{"user@foo.com"}, args)
+ }
+@@ -114,7 +122,7 @@ func TestSSHGetExeAndArgsSshCustomPort(t *testing.T) {
+ 	meta.Port = "8888"
+ 
+ 	exe, args, needShell, _, _ := ssh.GetExeAndArgs(cli.OSEnv(), cli.GitEnv(), &meta, false, "")
+-	exe, args = ssh.FormatArgs(exe, args, needShell)
++	assert.False(t, needShell)
+ 	assert.Equal(t, "ssh", exe)
+ 	assert.Equal(t, []string{"-p", "8888", "user@foo.com"}, args)
+ }
+@@ -130,8 +138,8 @@ func TestSSHGetExeAndArgsSshNoMultiplexing(t *testing.T) {
+ 	meta := ssh.SSHMetadata{}
+ 	meta.UserAndHost = "user@foo.com"
+ 
+-	exe, baseargs, needShell, multiplexing, controlPath := ssh.GetExeAndArgs(cli.OSEnv(), cli.GitEnv(), &meta, true, "")
+-	exe, args := ssh.FormatArgs(exe, baseargs, needShell)
++	exe, args, needShell, multiplexing, controlPath := ssh.GetExeAndArgs(cli.OSEnv(), cli.GitEnv(), &meta, true, "")
++	assert.False(t, needShell)
+ 	assert.Equal(t, "ssh", exe)
+ 	assert.Equal(t, false, multiplexing)
+ 	assert.Equal(t, []string{"user@foo.com"}, args)
+@@ -149,8 +157,8 @@ func TestSSHGetExeAndArgsSshMultiplexingMaster(t *testing.T) {
+ 	meta := ssh.SSHMetadata{}
+ 	meta.UserAndHost = "user@foo.com"
+ 
+-	exe, baseargs, needShell, multiplexing, controlPath := ssh.GetExeAndArgs(cli.OSEnv(), cli.GitEnv(), &meta, true, "")
+-	exe, args := ssh.FormatArgs(exe, baseargs, needShell)
++	exe, args, needShell, multiplexing, controlPath := ssh.GetExeAndArgs(cli.OSEnv(), cli.GitEnv(), &meta, true, "")
++	assert.False(t, needShell)
+ 	assert.Equal(t, "ssh", exe)
+ 	assert.Equal(t, true, multiplexing)
+ 	assert.Equal(t, 3, len(args))
+@@ -171,8 +179,8 @@ func TestSSHGetExeAndArgsSshMultiplexingExtra(t *testing.T) {
+ 	meta := ssh.SSHMetadata{}
+ 	meta.UserAndHost = "user@foo.com"
+ 
+-	exe, baseargs, needShell, multiplexing, controlPath := ssh.GetExeAndArgs(cli.OSEnv(), cli.GitEnv(), &meta, true, "/tmp/lfs/lfs.sock")
+-	exe, args := ssh.FormatArgs(exe, baseargs, needShell)
++	exe, args, needShell, multiplexing, controlPath := ssh.GetExeAndArgs(cli.OSEnv(), cli.GitEnv(), &meta, true, "/tmp/lfs/lfs.sock")
++	assert.False(t, needShell)
+ 	assert.Equal(t, "ssh", exe)
+ 	assert.Equal(t, true, multiplexing)
+ 	assert.Equal(t, []string{"-oControlMaster=no", "-oControlPath=/tmp/lfs/lfs.sock", "user@foo.com"}, args)
+@@ -191,7 +199,7 @@ func TestSSHGetExeAndArgsPlink(t *testing.T) {
+ 	meta.UserAndHost = "user@foo.com"
+ 
+ 	exe, args, needShell, _, _ := ssh.GetExeAndArgs(cli.OSEnv(), cli.GitEnv(), &meta, false, "")
+-	exe, args = ssh.FormatArgs(exe, args, needShell)
++	assert.False(t, needShell)
+ 	assert.Equal(t, plink, exe)
+ 	assert.Equal(t, []string{"user@foo.com"}, args)
+ }
+@@ -209,7 +217,7 @@ func TestSSHGetExeAndArgsPlinkCustomPort(t *testing.T) {
+ 	meta.Port = "8888"
+ 
+ 	exe, args, needShell, _, _ := ssh.GetExeAndArgs(cli.OSEnv(), cli.GitEnv(), &meta, false, "")
+-	exe, args = ssh.FormatArgs(exe, args, needShell)
++	assert.False(t, needShell)
+ 	assert.Equal(t, plink, exe)
+ 	assert.Equal(t, []string{"-P", "8888", "user@foo.com"}, args)
+ }
+@@ -228,7 +236,7 @@ func TestSSHGetExeAndArgsPlinkCustomPortExplicitEnvironment(t *testing.T) {
+ 	meta.Port = "8888"
+ 
+ 	exe, args, needShell, _, _ := ssh.GetExeAndArgs(cli.OSEnv(), cli.GitEnv(), &meta, false, "")
+-	exe, args = ssh.FormatArgs(exe, args, needShell)
++	assert.False(t, needShell)
+ 	assert.Equal(t, plink, exe)
+ 	assert.Equal(t, []string{"-P", "8888", "user@foo.com"}, args)
+ }
+@@ -247,7 +255,7 @@ func TestSSHGetExeAndArgsPlinkCustomPortExplicitEnvironmentPutty(t *testing.T) {
+ 	meta.Port = "8888"
+ 
+ 	exe, args, needShell, _, _ := ssh.GetExeAndArgs(cli.OSEnv(), cli.GitEnv(), &meta, false, "")
+-	exe, args = ssh.FormatArgs(exe, args, needShell)
++	assert.False(t, needShell)
+ 	assert.Equal(t, plink, exe)
+ 	assert.Equal(t, []string{"-P", "8888", "user@foo.com"}, args)
+ }
+@@ -266,7 +274,7 @@ func TestSSHGetExeAndArgsPlinkCustomPortExplicitEnvironmentSsh(t *testing.T) {
+ 	meta.Port = "8888"
+ 
+ 	exe, args, needShell, _, _ := ssh.GetExeAndArgs(cli.OSEnv(), cli.GitEnv(), &meta, false, "")
+-	exe, args = ssh.FormatArgs(exe, args, needShell)
++	assert.False(t, needShell)
+ 	assert.Equal(t, plink, exe)
+ 	assert.Equal(t, []string{"-p", "8888", "user@foo.com"}, args)
+ }
+@@ -283,7 +291,7 @@ func TestSSHGetExeAndArgsTortoisePlink(t *testing.T) {
+ 	meta.UserAndHost = "user@foo.com"
+ 
+ 	exe, args, needShell, _, _ := ssh.GetExeAndArgs(cli.OSEnv(), cli.GitEnv(), &meta, false, "")
+-	exe, args = ssh.FormatArgs(exe, args, needShell)
++	assert.False(t, needShell)
+ 	assert.Equal(t, plink, exe)
+ 	assert.Equal(t, []string{"-batch", "user@foo.com"}, args)
+ }
+@@ -301,7 +309,7 @@ func TestSSHGetExeAndArgsTortoisePlinkCustomPort(t *testing.T) {
+ 	meta.Port = "8888"
+ 
+ 	exe, args, needShell, _, _ := ssh.GetExeAndArgs(cli.OSEnv(), cli.GitEnv(), &meta, false, "")
+-	exe, args = ssh.FormatArgs(exe, args, needShell)
++	assert.False(t, needShell)
+ 	assert.Equal(t, plink, exe)
+ 	assert.Equal(t, []string{"-batch", "-P", "8888", "user@foo.com"}, args)
+ }
+@@ -320,7 +328,7 @@ func TestSSHGetExeAndArgsTortoisePlinkCustomPortExplicitEnvironment(t *testing.T
+ 	meta.Port = "8888"
+ 
+ 	exe, args, needShell, _, _ := ssh.GetExeAndArgs(cli.OSEnv(), cli.GitEnv(), &meta, false, "")
+-	exe, args = ssh.FormatArgs(exe, args, needShell)
++	assert.False(t, needShell)
+ 	assert.Equal(t, plink, exe)
+ 	assert.Equal(t, []string{"-batch", "-P", "8888", "user@foo.com"}, args)
+ }
+@@ -341,7 +349,7 @@ func TestSSHGetExeAndArgsTortoisePlinkCustomPortExplicitConfig(t *testing.T) {
+ 	meta.Port = "8888"
+ 
+ 	exe, args, needShell, _, _ := ssh.GetExeAndArgs(cli.OSEnv(), cli.GitEnv(), &meta, false, "")
+-	exe, args = ssh.FormatArgs(exe, args, needShell)
++	assert.False(t, needShell)
+ 	assert.Equal(t, plink, exe)
+ 	assert.Equal(t, []string{"-batch", "-P", "8888", "user@foo.com"}, args)
+ }
+@@ -361,182 +369,11 @@ func TestSSHGetExeAndArgsTortoisePlinkCustomPortExplicitConfigOverride(t *testin
+ 	meta.Port = "8888"
+ 
+ 	exe, args, needShell, _, _ := ssh.GetExeAndArgs(cli.OSEnv(), cli.GitEnv(), &meta, false, "")
+-	exe, args = ssh.FormatArgs(exe, args, needShell)
++	assert.False(t, needShell)
+ 	assert.Equal(t, plink, exe)
+ 	assert.Equal(t, []string{"-P", "8888", "user@foo.com"}, args)
+ }
+ 
+-func TestSSHGetExeAndArgsSshCommandPrecedence(t *testing.T) {
+-	cli := lfshttp.NewClient(lfshttp.NewContext(nil, map[string]string{
+-		"GIT_SSH_COMMAND": "sshcmd",
+-		"GIT_SSH":         "bad",
+-		"GIT_SSH_VARIANT": "simple",
+-	}, nil))
+-
+-	meta := ssh.SSHMetadata{}
+-	meta.UserAndHost = "user@foo.com"
+-
+-	exe, args, needShell, _, _ := ssh.GetExeAndArgs(cli.OSEnv(), cli.GitEnv(), &meta, false, "")
+-	exe, args = ssh.FormatArgs(exe, args, needShell)
+-	assert.Equal(t, "sh", exe)
+-	assert.Equal(t, []string{"-c", "sshcmd user@foo.com"}, args)
+-}
+-
+-func TestSSHGetExeAndArgsSshCommandArgs(t *testing.T) {
+-	cli := lfshttp.NewClient(lfshttp.NewContext(nil, map[string]string{
+-		"GIT_SSH_COMMAND": "sshcmd --args 1",
+-		"GIT_SSH_VARIANT": "simple",
+-	}, nil))
+-
+-	meta := ssh.SSHMetadata{}
+-	meta.UserAndHost = "user@foo.com"
+-
+-	exe, args, needShell, _, _ := ssh.GetExeAndArgs(cli.OSEnv(), cli.GitEnv(), &meta, false, "")
+-	exe, args = ssh.FormatArgs(exe, args, needShell)
+-	assert.Equal(t, "sh", exe)
+-	assert.Equal(t, []string{"-c", "sshcmd --args 1 user@foo.com"}, args)
+-}
+-
+-func TestSSHGetExeAndArgsSshCommandArgsWithMixedQuotes(t *testing.T) {
+-	cli := lfshttp.NewClient(lfshttp.NewContext(nil, map[string]string{
+-		"GIT_SSH_COMMAND": "sshcmd foo 'bar \"baz\"'",
+-		"GIT_SSH_VARIANT": "simple",
+-	}, nil))
+-
+-	meta := ssh.SSHMetadata{}
+-	meta.UserAndHost = "user@foo.com"
+-
+-	exe, args, needShell, _, _ := ssh.GetExeAndArgs(cli.OSEnv(), cli.GitEnv(), &meta, false, "")
+-	exe, args = ssh.FormatArgs(exe, args, needShell)
+-	assert.Equal(t, "sh", exe)
+-	assert.Equal(t, []string{"-c", "sshcmd foo 'bar \"baz\"' user@foo.com"}, args)
+-}
+-
+-func TestSSHGetExeAndArgsSshCommandCustomPort(t *testing.T) {
+-	cli := lfshttp.NewClient(lfshttp.NewContext(nil, map[string]string{
+-		"GIT_SSH_COMMAND": "sshcmd",
+-	}, nil))
+-
+-	meta := ssh.SSHMetadata{}
+-	meta.UserAndHost = "user@foo.com"
+-	meta.Port = "8888"
+-
+-	exe, args, needShell, _, _ := ssh.GetExeAndArgs(cli.OSEnv(), cli.GitEnv(), &meta, false, "")
+-	exe, args = ssh.FormatArgs(exe, args, needShell)
+-	assert.Equal(t, "sh", exe)
+-	assert.Equal(t, []string{"-c", "sshcmd -p 8888 user@foo.com"}, args)
+-}
+-
+-func TestSSHGetExeAndArgsCoreSshCommand(t *testing.T) {
+-	cli := lfshttp.NewClient(lfshttp.NewContext(nil, map[string]string{
+-		"GIT_SSH_COMMAND": "sshcmd --args 2",
+-	}, map[string]string{
+-		"core.sshcommand": "sshcmd --args 1",
+-	}))
+-
+-	meta := ssh.SSHMetadata{}
+-	meta.UserAndHost = "user@foo.com"
+-
+-	exe, args, needShell, _, _ := ssh.GetExeAndArgs(cli.OSEnv(), cli.GitEnv(), &meta, false, "")
+-	exe, args = ssh.FormatArgs(exe, args, needShell)
+-	assert.Equal(t, "sh", exe)
+-	assert.Equal(t, []string{"-c", "sshcmd --args 2 user@foo.com"}, args)
+-}
+-
+-func TestSSHGetExeAndArgsCoreSshCommandArgsWithMixedQuotes(t *testing.T) {
+-	cli := lfshttp.NewClient(lfshttp.NewContext(nil, nil, map[string]string{
+-		"core.sshcommand": "sshcmd foo 'bar \"baz\"'",
+-	}))
+-
+-	meta := ssh.SSHMetadata{}
+-	meta.UserAndHost = "user@foo.com"
+-
+-	exe, args, needShell, _, _ := ssh.GetExeAndArgs(cli.OSEnv(), cli.GitEnv(), &meta, false, "")
+-	exe, args = ssh.FormatArgs(exe, args, needShell)
+-	assert.Equal(t, "sh", exe)
+-	assert.Equal(t, []string{"-c", "sshcmd foo 'bar \"baz\"' user@foo.com"}, args)
+-}
+-
+-func TestSSHGetExeAndArgsConfigVersusEnv(t *testing.T) {
+-	cli := lfshttp.NewClient(lfshttp.NewContext(nil, nil, map[string]string{
+-		"core.sshcommand": "sshcmd --args 1",
+-	}))
+-
+-	meta := ssh.SSHMetadata{}
+-	meta.UserAndHost = "user@foo.com"
+-
+-	exe, args, needShell, _, _ := ssh.GetExeAndArgs(cli.OSEnv(), cli.GitEnv(), &meta, false, "")
+-	exe, args = ssh.FormatArgs(exe, args, needShell)
+-	assert.Equal(t, "sh", exe)
+-	assert.Equal(t, []string{"-c", "sshcmd --args 1 user@foo.com"}, args)
+-}
+-
+-func TestSSHGetExeAndArgsPlinkCommand(t *testing.T) {
+-	plink := filepath.Join("Users", "joebloggs", "bin", "plink.exe")
+-
+-	cli := lfshttp.NewClient(lfshttp.NewContext(nil, map[string]string{
+-		"GIT_SSH_COMMAND": plink,
+-	}, nil))
+-
+-	meta := ssh.SSHMetadata{}
+-	meta.UserAndHost = "user@foo.com"
+-
+-	exe, args, needShell, _, _ := ssh.GetExeAndArgs(cli.OSEnv(), cli.GitEnv(), &meta, false, "")
+-	exe, args = ssh.FormatArgs(exe, args, needShell)
+-	assert.Equal(t, "sh", exe)
+-	assert.Equal(t, []string{"-c", plink + " user@foo.com"}, args)
+-}
+-
+-func TestSSHGetExeAndArgsPlinkCommandCustomPort(t *testing.T) {
+-	plink := filepath.Join("Users", "joebloggs", "bin", "plink")
+-
+-	cli := lfshttp.NewClient(lfshttp.NewContext(nil, map[string]string{
+-		"GIT_SSH_COMMAND": plink,
+-	}, nil))
+-
+-	meta := ssh.SSHMetadata{}
+-	meta.UserAndHost = "user@foo.com"
+-	meta.Port = "8888"
+-
+-	exe, args, needShell, _, _ := ssh.GetExeAndArgs(cli.OSEnv(), cli.GitEnv(), &meta, false, "")
+-	exe, args = ssh.FormatArgs(exe, args, needShell)
+-	assert.Equal(t, "sh", exe)
+-	assert.Equal(t, []string{"-c", plink + " -P 8888 user@foo.com"}, args)
+-}
+-
+-func TestSSHGetExeAndArgsTortoisePlinkCommand(t *testing.T) {
+-	plink := filepath.Join("Users", "joebloggs", "bin", "tortoiseplink.exe")
+-
+-	cli := lfshttp.NewClient(lfshttp.NewContext(nil, map[string]string{
+-		"GIT_SSH_COMMAND": plink,
+-	}, nil))
+-
+-	meta := ssh.SSHMetadata{}
+-	meta.UserAndHost = "user@foo.com"
+-
+-	exe, args, needShell, _, _ := ssh.GetExeAndArgs(cli.OSEnv(), cli.GitEnv(), &meta, false, "")
+-	exe, args = ssh.FormatArgs(exe, args, needShell)
+-	assert.Equal(t, "sh", exe)
+-	assert.Equal(t, []string{"-c", plink + " -batch user@foo.com"}, args)
+-}
+-
+-func TestSSHGetExeAndArgsTortoisePlinkCommandCustomPort(t *testing.T) {
+-	plink := filepath.Join("Users", "joebloggs", "bin", "tortoiseplink")
+-
+-	cli := lfshttp.NewClient(lfshttp.NewContext(nil, map[string]string{
+-		"GIT_SSH_COMMAND": plink,
+-	}, nil))
+-
+-	meta := ssh.SSHMetadata{}
+-	meta.UserAndHost = "user@foo.com"
+-	meta.Port = "8888"
+-
+-	exe, args, needShell, _, _ := ssh.GetExeAndArgs(cli.OSEnv(), cli.GitEnv(), &meta, false, "")
+-	exe, args = ssh.FormatArgs(exe, args, needShell)
+-	assert.Equal(t, "sh", exe)
+-	assert.Equal(t, []string{"-c", plink + " -batch -P 8888 user@foo.com"}, args)
+-}
+-
+ func TestSSHGetLFSExeAndArgsWithCustomSSH(t *testing.T) {
+ 	cli := lfshttp.NewClient(lfshttp.NewContext(nil, map[string]string{
+ 		"GIT_SSH":         "not-ssh",
+@@ -552,7 +389,8 @@ func TestSSHGetLFSExeAndArgsWithCustomSSH(t *testing.T) {
+ 	assert.Equal(t, "git@host.com", e.SSHMetadata.UserAndHost)
+ 	assert.Equal(t, "/repo", e.SSHMetadata.Path)
+ 
+-	exe, args, _, _ := ssh.GetLFSExeAndArgs(cli.OSEnv(), cli.GitEnv(), &e.SSHMetadata, "git-lfs-authenticate", "download", false, "")
++	exe, args, _, _, err := ssh.GetLFSExeAndArgs(cli.OSEnv(), cli.GitEnv(), &e.SSHMetadata, "git-lfs-authenticate", "download", false, "")
++	require.NoError(t, err)
+ 	assert.Equal(t, "not-ssh", exe)
+ 	assert.Equal(t, []string{"-p", "12345", "git@host.com", "git-lfs-authenticate /repo download"}, args)
+ }
+@@ -569,7 +407,8 @@ func TestSSHGetLFSExeAndArgsInvalidOptionsAsHost(t *testing.T) {
+ 	assert.Equal(t, "-oProxyCommand=gnome-calculator", e.SSHMetadata.UserAndHost)
+ 	assert.Equal(t, "/repo", e.SSHMetadata.Path)
+ 
+-	exe, args, _, _ := ssh.GetLFSExeAndArgs(cli.OSEnv(), cli.GitEnv(), &e.SSHMetadata, "git-lfs-authenticate", "download", false, "")
++	exe, args, _, _, err := ssh.GetLFSExeAndArgs(cli.OSEnv(), cli.GitEnv(), &e.SSHMetadata, "git-lfs-authenticate", "download", false, "")
++	require.NoError(t, err)
+ 	assert.Equal(t, "ssh", exe)
+ 	assert.Equal(t, []string{"--", "-oProxyCommand=gnome-calculator", "git-lfs-authenticate /repo download"}, args)
+ }
+@@ -589,7 +428,8 @@ func TestSSHGetLFSExeAndArgsInvalidOptionsAsHostWithCustomSSH(t *testing.T) {
+ 	assert.Equal(t, "--oProxyCommand=gnome-calculator", e.SSHMetadata.UserAndHost)
+ 	assert.Equal(t, "/repo", e.SSHMetadata.Path)
+ 
+-	exe, args, _, _ := ssh.GetLFSExeAndArgs(cli.OSEnv(), cli.GitEnv(), &e.SSHMetadata, "git-lfs-authenticate", "download", false, "")
++	exe, args, _, _, err := ssh.GetLFSExeAndArgs(cli.OSEnv(), cli.GitEnv(), &e.SSHMetadata, "git-lfs-authenticate", "download", false, "")
++	require.NoError(t, err)
+ 	assert.Equal(t, "not-ssh", exe)
+ 	assert.Equal(t, []string{"oProxyCommand=gnome-calculator", "git-lfs-authenticate /repo download"}, args)
+ }
+diff --git a/subprocess/subprocess.go b/subprocess/subprocess.go
+index 88808c7..7056cf8 100644
+--- a/subprocess/subprocess.go
++++ b/subprocess/subprocess.go
+@@ -136,17 +136,21 @@ func ShellQuote(strs []string) []string {
+ }
+ 
+ // FormatForShell takes a command name and an argument string and returns a
+-// command and arguments that pass this command to the shell.  Note that neither
+-// the command nor the arguments are quoted.  Consider FormatForShellQuoted
+-// instead.
+-func FormatForShell(name string, args string) (string, []string) {
+-	return "sh", []string{"-c", name + " " + args}
++// command and arguments that pass this command to the shell, or a shell lookup
++// error. Neither the command nor the arguments are quoted; consider
++// FormatForShellQuotedArgs instead.
++func FormatForShell(name string, args string) (string, []string, error) {
++	shell, err := shellPath()
++	if err != nil {
++		return "", nil, err
++	}
++	return shell, []string{"-c", name + " " + args}, nil
+ }
+ 
+ // FormatForShellQuotedArgs takes a command name and an argument string and
+ // returns a command and arguments that pass this command to the shell.  The
+ // arguments are escaped, but the name of the command is not.
+-func FormatForShellQuotedArgs(name string, args []string) (string, []string) {
++func FormatForShellQuotedArgs(name string, args []string) (string, []string, error) {
+ 	return FormatForShell(name, strings.Join(ShellQuote(args), " "))
+ }
+ 
+@@ -198,6 +202,7 @@ func quotedArgs(args []string) string {
+ // An env for an exec.Command without GIT_TRACE and GIT_INTERNAL_SUPER_PREFIX
+ var env []string
+ var envMu sync.Mutex
++var envGeneration uint64
+ var traceEnv = "GIT_TRACE="
+ 
+ // Don't pass GIT_INTERNAL_SUPER_PREFIX back to Git. Git passes this environment
+@@ -241,6 +246,7 @@ func ResetEnvironment() {
+ 	defer envMu.Unlock()
+ 
+ 	env = nil
++	envGeneration++
+ 	// Reinitialize the environment settings.
+ 	fetchEnvironmentInternal()
+ }
+diff --git a/subprocess/subprocess_nix.go b/subprocess/subprocess_nix.go
+index 611fbb1..972157b 100644
+--- a/subprocess/subprocess_nix.go
++++ b/subprocess/subprocess_nix.go
+@@ -18,3 +18,7 @@ func ExecCommand(name string, arg ...string) (*Cmd, error) {
+ 	cmd.Env = fetchEnvironment()
+ 	return newCmd(cmd), nil
+ }
++
++func shellPath() (string, error) {
++	return "sh", nil
++}
+diff --git a/subprocess/subprocess_test.go b/subprocess/subprocess_test.go
+index cd41765..fdac8c0 100644
+--- a/subprocess/subprocess_test.go
++++ b/subprocess/subprocess_test.go
+@@ -39,66 +39,6 @@ func TestShellQuote(t *testing.T) {
+ 	}
+ }
+ 
+-type FormatForShellQuotedArgsTestCase struct {
+-	GivenCmd     string
+-	GivenArgs    []string
+-	ExpectedArgs []string
+-}
+-
+-func (c *FormatForShellQuotedArgsTestCase) Assert(t *testing.T) {
+-	actualCmd, actualArgs := FormatForShellQuotedArgs(c.GivenCmd, c.GivenArgs)
+-
+-	assert.Equal(t, "sh", actualCmd,
+-		"subprocess: expected FormatForShell command to equal 'sh' (was #%v)",
+-		actualCmd)
+-	assert.Equal(t, c.ExpectedArgs, actualArgs,
+-		"subprocess: expected FormatForShell(%q, %v) to equal %#v (was %#v)",
+-		c.GivenCmd, c.GivenArgs, c.ExpectedArgs, actualArgs,
+-	)
+-}
+-
+-func TestFormatForShellQuotedArgs(t *testing.T) {
+-	for desc, c := range map[string]FormatForShellQuotedArgsTestCase{
+-		"empty":       {"foo", []string{"", "bar", " "}, []string{"-c", "foo '' bar ' '"}},
+-		"simple":      {"foo", []string{"bar", "baz"}, []string{"-c", "foo bar baz"}},
+-		"unsafe":      {"foo", []string{";bar", "b|a&z"}, []string{"-c", "foo ';bar' 'b|a&z'"}},
+-		"spaces":      {"foo quux", []string{" bar", "baz "}, []string{"-c", "foo quux ' bar' 'baz '"}},
+-		"newlines":    {"foo", []string{"bar\n", "\r\nbaz"}, []string{"-c", "foo 'bar\n' '\r\nbaz'"}},
+-		"backslashes": {"bin/foo", []string{"\\bar", "b\\az"}, []string{"-c", "bin/foo '\\bar' 'b\\az'"}},
+-		"quotes":      {"foo", []string{"'baz'", `"baz"`, `b'a"z`}, []string{"-c", `foo ''\''baz'\''' '"baz"' 'b'\''a"z'`}},
+-	} {
+-		t.Run(desc, c.Assert)
+-	}
+-}
+-
+-type FormatForShellTestCase struct {
+-	GivenCmd     string
+-	GivenArgs    string
+-	ExpectedArgs []string
+-}
+-
+-func (c *FormatForShellTestCase) Assert(t *testing.T) {
+-	actualCmd, actualArgs := FormatForShell(c.GivenCmd, c.GivenArgs)
+-
+-	assert.Equal(t, "sh", actualCmd,
+-		"subprocess: expected FormatForShell command to equal 'sh' (was #%v)",
+-		actualCmd)
+-	assert.Equal(t, c.ExpectedArgs, actualArgs,
+-		"subprocess: expected FormatForShell(%q, %v) to equal %#v (was %#v)",
+-		c.GivenCmd, c.GivenArgs, c.ExpectedArgs, actualArgs,
+-	)
+-}
+-
+-func TestFormatForShell(t *testing.T) {
+-	for desc, c := range map[string]FormatForShellTestCase{
+-		"simple": {"foo", "bar", []string{"-c", "foo bar"}},
+-		"spaces": {"foo quux", "bar baz", []string{"-c", "foo quux bar baz"}},
+-		"quotes": {"bin/foo", "bar \"baz quux\" 'fred wilma'", []string{"-c", "bin/foo bar \"baz quux\" 'fred wilma'"}},
+-	} {
+-		t.Run(desc, c.Assert)
+-	}
+-}
+-
+ type FormatPercentSequencesTestCase struct {
+ 	GivenPattern      string
+ 	GivenReplacements map[string]string
+diff --git a/subprocess/subprocess_windows.go b/subprocess/subprocess_windows.go
+index d56c7f5..e4da7ab 100644
+--- a/subprocess/subprocess_windows.go
++++ b/subprocess/subprocess_windows.go
+@@ -4,7 +4,12 @@
+ package subprocess
+ 
+ import (
++	"fmt"
++	"os"
+ 	"os/exec"
++	"path/filepath"
++	"strings"
++	"sync"
+ 	"syscall"
+ )
+ 
+@@ -20,3 +25,62 @@ func ExecCommand(name string, arg ...string) (*Cmd, error) {
+ 	cmd.Env = fetchEnvironment()
+ 	return newCmd(cmd), nil
+ }
++
++var shellCache struct {
++	sync.Mutex
++	dir        string
++	generation uint64
++	path       string
++	err        error
++	ready      bool
++}
++
++// Cache Git's shell for the current repository/environment, not for the entire
++// process: clone can change directories and ResetEnvironment can change config.
++// Serialize the lookup so concurrent transfer workers only invoke Git once.
++func shellPath() (string, error) {
++	dir, err := os.Getwd()
++	if err != nil {
++		return "", fmt.Errorf("resolving Git shell working directory: %w", err)
++	}
++	envMu.Lock()
++	environment := fetchEnvironmentInternal()
++	generation := envGeneration
++	envMu.Unlock()
++
++	shellCache.Lock()
++	defer shellCache.Unlock()
++	if shellCache.ready && shellCache.dir == dir && shellCache.generation == generation {
++		return shellCache.path, shellCache.err
++	}
++	shellCache.dir = dir
++	shellCache.generation = generation
++	shellCache.path, shellCache.err = resolveShellPath(dir, environment)
++	shellCache.ready = true
++	return shellCache.path, shellCache.err
++}
++
++func resolveShellPath(dir string, environment []string) (string, error) {
++	cmd, err := ExecCommand("git", "var", "GIT_SHELL_PATH")
++	if err != nil {
++		return "", fmt.Errorf("resolving Git shell: %w", err)
++	}
++	cmd.Dir = dir
++	cmd.Env = environment
++	out, err := cmd.Output()
++	if err != nil {
++		if exitErr, ok := err.(*exec.ExitError); ok {
++			return "", fmt.Errorf("git var GIT_SHELL_PATH: %w: %s", err, strings.TrimSpace(string(exitErr.Stderr)))
++		}
++		return "", fmt.Errorf("git var GIT_SHELL_PATH: %w", err)
++	}
++	shell := filepath.FromSlash(strings.TrimSuffix(strings.TrimSuffix(string(out), "\n"), "\r"))
++	if shell == "" {
++		return "", fmt.Errorf("git var GIT_SHELL_PATH returned an empty shell")
++	}
++	resolved, err := LookPath(shell)
++	if err != nil {
++		return "", fmt.Errorf("resolving Git shell %q: %w", shell, err)
++	}
++	return resolved, nil
++}
+diff --git a/tq/custom.go b/tq/custom.go
+index ac2effa..80b74ae 100644
+--- a/tq/custom.go
++++ b/tq/custom.go
+@@ -124,7 +124,10 @@ func (a *customAdapter) WorkerStarting(workerNum int) (interface{}, error) {
+ 	// Start a process per worker
+ 	// If concurrent = false we have already dialled back workers to 1
+ 	a.Trace("xfer: starting up custom transfer process %q for worker %d", a.name, workerNum)
+-	cmdName, cmdArgs := subprocess.FormatForShell(subprocess.ShellQuoteSingle(a.path), a.args)
++	cmdName, cmdArgs, err := subprocess.FormatForShell(subprocess.ShellQuoteSingle(a.path), a.args)
++	if err != nil {
++		return nil, err
++	}
+ 	cmd, err := subprocess.ExecCommand(cmdName, cmdArgs...)
+ 	if err != nil {
+ 		return nil, errors.New(tr.Tr.Get("failed to find custom transfer command %q remote: %v", a.path, err))

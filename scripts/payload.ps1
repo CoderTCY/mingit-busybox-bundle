@@ -1,8 +1,9 @@
 # SPDX-License-Identifier: GPL-2.0-only
 . "$PSScriptRoot/common.ps1"
 
-function Set-BundleLfs {
-    param([Parameter(Mandatory)]$Lfs, [Parameter(Mandatory)][string]$Payload, [Parameter(Mandatory)][string]$Work)
+function Get-BundleLfsRelease {
+    param([Parameter(Mandatory)]$Lfs, [Parameter(Mandatory)][string]$Work)
+    if ($Lfs.vendor -cne 'GitHub') { throw 'Official LFS binary downloads are only used for the genuine upgrade fixture' }
     $zip = Receive-BundleFile $Lfs (Join-Path $Work "downloads/$($Lfs.name)")
     $unpack = Join-Path $Work "lfs-$($Lfs.version)"
     if (-not (Test-Path -LiteralPath $unpack)) { Expand-Archive -LiteralPath $zip -DestinationPath $unpack }
@@ -10,8 +11,13 @@ function Set-BundleLfs {
     $executables = @(Get-ChildItem -LiteralPath $unpack -Filter 'git-lfs.exe' -File -Recurse)
     $expected = [IO.Path]::GetFullPath((Join-Path $component 'git-lfs.exe'))
     if ($executables.Count -ne 1 -or $executables[0].FullName -ine $expected) { throw 'Unexpected official Git LFS ZIP layout' }
-    Copy-Item -LiteralPath $expected -Destination (Join-Path $Payload 'ucrt64/bin/git-lfs.exe') -Force
+    return $component
+}
 
+function Set-BundleLfs {
+    param([Parameter(Mandatory)]$Lfs, [Parameter(Mandatory)][string]$Payload, [Parameter(Mandatory)][string]$Work,
+          [Parameter(Mandatory)][string]$BinaryPath, [Parameter(Mandatory)][string]$DocumentationPath)
+    Copy-Item -LiteralPath $BinaryPath -Destination (Join-Path $Payload 'ucrt64/bin/git-lfs.exe') -Force
     $docs = Join-Path $Payload 'ucrt64/share/doc/git-lfs'
     $licenses = Join-Path $Payload 'ucrt64/share/licenses/git-lfs'
     # These paths are private generated payload trees, never a live installation.
@@ -19,8 +25,8 @@ function Set-BundleLfs {
         if (Test-Path -LiteralPath $directory) { Remove-Item -LiteralPath $directory -Recurse -Force }
         [IO.Directory]::CreateDirectory($directory) | Out-Null
     }
-    foreach ($file in Get-ChildItem -LiteralPath $component -File -Recurse) {
-        $relative = [IO.Path]::GetRelativePath($component, $file.FullName)
+    foreach ($file in Get-ChildItem -LiteralPath $DocumentationPath -File -Recurse) {
+        $relative = [IO.Path]::GetRelativePath($DocumentationPath, $file.FullName)
         if ($file.Extension -in @('.md', '.adoc', '.html', '.1', '.5', '.7') -or $relative -match '^man[/\\]') {
             $destination = Join-Path $docs $relative
             [IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($destination)) | Out-Null

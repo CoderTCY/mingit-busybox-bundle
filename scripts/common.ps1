@@ -62,8 +62,10 @@ function Assert-BundleInputs {
     $lock = Get-Content -LiteralPath (Join-Path $ProjectRoot 'build/toolchain.lock.json') -Raw | ConvertFrom-Json
     if (($lock | ConvertTo-Json -Depth 20 -Compress) -cne ($Inputs.toolchain | ConvertTo-Json -Depth 20 -Compress)) { throw 'Toolchain lock differs from snapshot' }
     if ($Inputs.toolchain.busybox.commit -notmatch '^[0-9a-f]{40}$') { throw 'BusyBox source is not a pinned commit' }
-    $expectedPatches = @('patches/0001-core-shell.patch', 'patches/0002-package-inputs.patch', 'patches/0003-busybox-unicode.patch', 'patches/0004-busybox-package-inputs.patch')
-    if (($Inputs.patches.path -join "`n") -cne ($expectedPatches -join "`n")) { throw 'All four reviewed Git and BusyBox patches are required' }
+    if ($Inputs.lfs.commit -notmatch '^[0-9a-f]{40}$' -or $Inputs.lfs.source.sha256 -notmatch '^[0-9a-f]{64}$') { throw 'LFS source is not pinned' }
+    if ($Inputs.lfs.vendor -cne ("MinGitBusyBoxBundle.r" + $recipe.Substring(0,12))) { throw 'Target LFS must identify this custom build' }
+    $expectedPatches = @('patches/0001-core-shell.patch', 'patches/0002-package-inputs.patch', 'patches/0003-busybox-unicode.patch', 'patches/0004-busybox-package-inputs.patch', 'patches/0005-lfs-core-shell.patch')
+    if (($Inputs.patches.path -join "`n") -cne ($expectedPatches -join "`n")) { throw 'All five reviewed Git, BusyBox and LFS patches are required' }
     foreach ($patch in $Inputs.patches) {
         if ((Get-FileHash -LiteralPath (Join-Path $ProjectRoot $patch.path) -Algorithm SHA256).Hash.ToLowerInvariant() -cne $patch.sha256) { throw "Patch changed: $($patch.path)" }
     }

@@ -145,6 +145,10 @@ jobs:
             build/work/compiler.txt
             build/work/source-locales.txt
             build/work/git-source-commit.txt
+            build/work/busybox-source-commit.txt
+            build/work/busybox-packages.txt
+            build/work/lfs-build/build.json
+            build/work/lfs-build/documentation-toolchain.txt
           if-no-files-found: warn
           retention-days: 30
           overwrite: true

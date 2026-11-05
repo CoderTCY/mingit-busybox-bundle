@@ -62,7 +62,7 @@ function Test-CorePayload([string] $Root, [string] $Label) {
     Assert-WithinRoot $shell $Root
     Assert-Acceptance ((ConvertTo-ComparablePath $shell) -ieq (ConvertTo-ComparablePath (Join-Path $Root 'ucrt64/bin/ash.exe'))) "Unexpected runtime shell: $shell"
     $lfsVersion = (Invoke-Git @('lfs', 'version')).stdout.Trim()
-    Assert-Acceptance ($lfsVersion -match ('^git-lfs/' + [Regex]::Escape($script:Inputs.lfs.version) + ' \(GitHub; windows amd64;')) "Wrong installed LFS: $lfsVersion"
+    Assert-Acceptance ($lfsVersion -match ('^git-lfs/' + [Regex]::Escape($script:Inputs.lfs.version) + ' \(' + [Regex]::Escape($script:Inputs.lfs.vendor) + '; windows amd64;')) "Wrong installed LFS build: $lfsVersion"
     foreach ($pair in @{ clean = 'git-lfs clean -- %f'; smudge = 'git-lfs smudge -- %f'; process = 'git-lfs filter-process'; required = 'true' }.GetEnumerator()) {
         $value = (Invoke-Git @('config', '--system', '--includes', '--get', "filter.lfs.$($pair.Key)")).stdout.Trim()
         Assert-Acceptance ($value -ceq $pair.Value) "Missing product system LFS filter: $($pair.Key)"
@@ -169,8 +169,12 @@ function Test-LfsRoundtrip {
     Assert-Acceptance ($pointer -ceq $expectedPointer) 'Committed blob is not the exact expected LFS pointer.'
     $url = [Uri]::new([IO.Path]::GetFullPath($remote)).AbsoluteUri
     $null = Invoke-Git @('remote', 'add', 'origin', $url) $writer
-    $null = Invoke-Git @('push', '--set-upstream', 'origin', 'main') $writer
     $objectSuffix = "lfs/objects/$($oid.Substring(0, 2))/$($oid.Substring(2, 2))/$oid"
+    $invalidShell = Join-Path $script:RunRoot 'missing LFS shell/ash.exe'
+    $blocked = Invoke-Git @('-c', "core.shell=$invalidShell", 'lfs', 'push', 'origin', 'main') $writer @()
+    Assert-Acceptance ($blocked.exit -ne 0) 'LFS silently fell back from an unavailable configured shell.'
+    Assert-Acceptance (-not (Test-Path -LiteralPath (Join-Path $remote $objectSuffix))) 'LFS uploaded an object despite its unavailable configured shell.'
+    $null = Invoke-Git @('push', '--set-upstream', 'origin', 'main') $writer
     Assert-FileContent (Join-Path $remote $objectSuffix) $oid $length
     Assert-FileContent (Join-Path $writer ".git/$objectSuffix") $oid $length
     $null = Invoke-Git @('clone', '--branch', 'main', $url, $reader)
@@ -180,7 +184,7 @@ function Test-LfsRoundtrip {
     $trace = Get-Content -LiteralPath $script:GitEnvironment.GIT_TRACE -Raw
     Assert-Acceptance ($trace -match 'pre-push' -and $trace -match 'git-lfs filter-process') 'Real LFS hook/filter chain was not observed.'
     Write-Utf8 (Join-Path $script:RunRoot 'lfs-roundtrip.json') (@{ oid = $oid; length = $length; remote = $url; pointer = $pointer; transport = 'standalone-file'; prePush = $hook; reader = $reader } | ConvertTo-Json)
-    $report.checks += 'LFS: pointer, normal push/pre-push, remote+writer+reader objects, automatic clone checkout, fsck'
+    $report.checks += 'LFS: configured shell, invalid-shell rejection, pointer, normal push/pre-push, remote+writer+reader objects, automatic clone checkout, fsck'
 }
 
 try {

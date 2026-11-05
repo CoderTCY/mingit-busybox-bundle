@@ -39,7 +39,16 @@ foreach ($locale in $sourceLocales) {
     Copy-Item -LiteralPath $source -Destination $destination
 }
 Copy-Item -LiteralPath (Join-Path $work 'mingit-open.exe') -Destination (Join-Path $payload 'ucrt64/bin/mingit-open.exe')
-Set-BundleLfs -Lfs $inputs.lfs -Payload $payload -Work $work
+$lfsBuild = Get-Content -LiteralPath (Join-Path $work 'lfs-build/build.json') -Raw | ConvertFrom-Json
+foreach ($key in @('tag', 'version', 'commit', 'vendor')) {
+    if ($lfsBuild.$key -cne $inputs.lfs.$key) { throw "Rebuilt LFS $key differs from inputs" }
+}
+$lfsPatch = @($inputs.patches | Where-Object path -CEQ 'patches/0005-lfs-core-shell.patch')[0]
+if ($lfsBuild.recipeCommit -cne $inputs.recipeCommit -or $lfsBuild.source.sha256 -cne $inputs.lfs.source.sha256 -or $lfsBuild.patch.sha256 -cne $lfsPatch.sha256) { throw 'Rebuilt LFS source/recipe/patch identity differs from inputs' }
+$lfsBinary = Join-Path $work 'lfs-build/git-lfs.exe'
+if ((Get-FileHash -LiteralPath $lfsBinary -Algorithm SHA256).Hash.ToLowerInvariant() -cne $lfsBuild.binarySha256 -or (Get-Item -LiteralPath $lfsBinary).Length -ne $lfsBuild.length) { throw 'Rebuilt LFS binary differs from its build record' }
+Set-BundleLfs -Lfs $inputs.lfs -Payload $payload -Work $work -BinaryPath $lfsBinary -DocumentationPath (Join-Path $work 'lfs-build/documentation')
+Copy-Item -LiteralPath (Join-Path $work 'lfs-build/go-LICENSE') -Destination (Join-Path $payload 'ucrt64/share/licenses/git-lfs/go-LICENSE')
 
 # Exporter's system configuration may include unrelated full Git installations.
 # Replace it with independently versioned defaults; never import host/SDK config.
@@ -75,6 +84,7 @@ $manifest = [ordered]@{
         git = [ordered]@{ commit = $inputs.git.commit; packages = @(Get-Content -LiteralPath (Join-Path $work 'built-packages.txt') | ForEach-Object { [IO.Path]::GetFileName($_) }) }
         busybox = [ordered]@{ commit = $inputs.toolchain.busybox.commit; version = "$($inputs.toolchain.busybox.version).busyboxbundle.$($inputs.recipeCommit.Substring(0,12))-1"; packages = @(Get-Content -LiteralPath (Join-Path $work 'busybox-packages.txt') | ForEach-Object { [IO.Path]::GetFileName($_) }) }
         lfs = $inputs.lfs
+        lfsBuild = $lfsBuild
         exporter = [ordered]@{ commit = $inputs.toolchain.buildExtraCommit; sha256 = (Get-FileHash -LiteralPath $exports[0].FullName -Algorithm SHA256).Hash.ToLowerInvariant() }
         opener = [ordered]@{ source = 'native/mingit-open.c'; recipeCommit = $inputs.recipeCommit }
     }

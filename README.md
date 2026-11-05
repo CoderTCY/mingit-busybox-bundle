@@ -1,6 +1,6 @@
 # MinGit BusyBox Bundle
 
-非官方 Windows 10 1903+ / Windows 11 原生 x64 离线整合安装器：重编的 MinGit (BusyBox)、Git LFS、同源 Git HTML 手册和全部 native Git gettext catalogs。自有整合代码采用 GPL-2.0-only；第三方代码保留原作者与许可。
+非官方 Windows 10 1903+ / Windows 11 原生 x64 离线整合安装器：重编的 MinGit (BusyBox) 与 Git LFS、同源 Git HTML 手册和全部 native Git gettext catalogs。自有构建与整合代码采用 GPL-2.0-only；第三方代码及 LFS 组件补丁保留上游许可（LFS 为 MIT）与作者归属。
 
 ## 构建输入
 
@@ -32,7 +32,11 @@ ash 默认启用已有的 `winxp` 选项，仅为保留继承环境变量的反�
 
 SDK 子集可能保留 pacman 登记而裁掉实际工具或 DLL。构建入口从官方包恢复 MSYS Git、pacman、HTTPS 依赖、完整 GCC/CRT 及 Cargo 所需 SQLite，再执行官方配方；不以 `NO_RUST` 或 `NO_GETTEXT` 绕过缺依赖。离线手册使用 Asciidoctor 的 `webfonts!` 属性，不引用远程字体。
 
-LFS 对应源码取官方 `git-lfs-vendor-<tag>.tar.gz`（包含 vendored modules），不是不含依赖的普通源码 tarball；安装包内的 LFS 许可证和第三方 notices 也来自这份已校验归档。
+LFS 从官方 `git-lfs-vendor-<tag>.tar.gz`（含 vendored modules）重编，不使用目标版本的官方二进制代替。`0005-lfs-core-shell.patch` 让 Windows shell 调用通过 `git var GIT_SHELL_PATH` 取得 `core.shell`，涵盖 custom/file transfer 和需要 shell 的 SSH 路径；查询或配置的 shell 不可用时失败，不回退外部 `sh`。安装树仍只有原定 `ash.exe` 入口。
+
+LFS 保留上游语义版本，通过原有 `config.Vendor=MinGitBusyBoxBundle.r<recipe>` 与完整 `config.GitCommit` 链接字段明确标识自定义构建。Go 1.27.3、Windows 资源生成器及其源码依赖均有固定 SHA-256；文档复用 SDK 的 Ruby/Asciidoctor。构建使用 vendor 模式，禁止隐式模块或工具链下载，保留 Windows 资源、内置帮助与翻译生成步骤。
+
+来源附件包括原始 LFS vendor 归档、第五份补丁、构建记录、对应 Go runtime 源码和资源生成器源码；随包提供 Go 与 LFS/vendor notices。只有较旧 LFS 升级 fixture 使用经过校验的官方 ZIP，绝不作为主安装包的回退，也不会公开发布该 fixture。
 
 固定 Action 不能冻结整个滚动 SDK；构建记录实际 pacman 包和 compiler 版本，不承诺字节级可复现。产品没有可信代码签名证书，安装器为未签名自定义构建，不是 Git for Windows 官方签名发行版。
 

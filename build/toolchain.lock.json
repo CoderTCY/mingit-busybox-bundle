@@ -6,6 +6,39 @@
     "commit": "d8d8bb397f1e200ba5a871dc6aa4af819b23f32a",
     "version": "1.38.0.21234.d8d8bb397"
   },
+  "go": {
+    "version": "1.27.3",
+    "binary": {
+      "name": "go1.27.3.windows-amd64.zip",
+      "url": "https://go.dev/dl/go1.27.3.windows-amd64.zip",
+      "sha256": "f26081f438319757f8a1b46d7d0b2c5ec7583d4038e485e0aa725cfde7885fff"
+    },
+    "source": {
+      "name": "go1.27.3.src.tar.gz",
+      "url": "https://go.dev/dl/go1.27.3.src.tar.gz",
+      "sha256": "6e7749035cf360f06b2575d162ea79df9fda8ef671889e5c375f8e50777f26bb"
+    }
+  },
+  "goversioninfo": {
+    "version": "v1.7.0",
+    "module": "github.com/josephspurrier/goversioninfo",
+    "source": {
+      "name": "goversioninfo-v1.7.0.zip",
+      "url": "https://proxy.golang.org/github.com/josephspurrier/goversioninfo/@v/v1.7.0.zip",
+      "sha256": "fbd5f0441b698eab2541842cf43d7737804cc70f6d720a3aa9775947466430ae"
+    },
+    "dependencies": [
+      {
+        "module": "github.com/akavel/rsrc",
+        "version": "v0.10.2",
+        "source": {
+          "name": "rsrc-v0.10.2.zip",
+          "url": "https://proxy.golang.org/github.com/akavel/rsrc/@v/v0.10.2.zip",
+          "sha256": "4a1f17e289dec94b49610f74b467c7e2053332e856a8766ec8c3e7c3d39af04f"
+        }
+      }
+    ]
+  },
   "inno": {
     "version": "7.1.1",
     "url": "https://github.com/jrsoftware/issrc/releases/download/is-7_1_1/innosetup-7.1.1-x64.exe",

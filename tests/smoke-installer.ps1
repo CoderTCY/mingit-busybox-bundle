@@ -171,7 +171,7 @@ try {
         if ($first -and $UpgradeInstaller) {
             $null = Invoke-Install -Exe $UpgradeInstaller
             $oldVersion = (Invoke-InstalledGit @('lfs', 'version')).stdout.Trim()
-            Assert-Acceptance ($oldVersion -match ('^git-lfs/' + [Regex]::Escape($inputs.upgradeFixture.lfs.version) + ' ')) 'Upgrade fixture does not contain the locked older real LFS executable.'
+            Assert-Acceptance ($oldVersion -match ('^git-lfs/' + [Regex]::Escape($inputs.upgradeFixture.lfs.version) + ' \(' + [Regex]::Escape($inputs.upgradeFixture.lfs.vendor) + ';')) 'Upgrade fixture does not contain the locked older real LFS executable.'
             Assert-Acceptance ([version]$inputs.upgradeFixture.lfs.version -lt [version]$inputs.lfs.version) 'Upgrade fixture LFS version is not older.'
             $gitExe = Join-Path $script:InstallDirectory 'ucrt64/bin/git.exe'
             $beforeGitHash = Get-Sha256 $gitExe
@@ -188,7 +188,7 @@ try {
             Assert-Acceptance ((Get-Sha256 $gitExe) -ceq $beforeGitHash) 'LFS-only upgrade unexpectedly changed Git binary.'
             Assert-Acceptance ([Diagnostics.FileVersionInfo]::GetVersionInfo($gitExe).FileVersion -ceq $beforePeVersion) 'LFS-only upgrade changed Git PE version.'
             $newVersion = (Invoke-InstalledGit @('lfs', 'version')).stdout.Trim()
-            Assert-Acceptance ($newVersion -match ('^git-lfs/' + [Regex]::Escape($inputs.lfs.version) + ' ') -and $newVersion -cne $oldVersion) 'LFS-only upgrade did not replace the real LFS executable.'
+            Assert-Acceptance ($newVersion -match ('^git-lfs/' + [Regex]::Escape($inputs.lfs.version) + ' \(' + [Regex]::Escape($inputs.lfs.vendor) + ';') -and $newVersion -cne $oldVersion) 'LFS-only upgrade did not replace the real LFS executable.'
         }
         Assert-Acceptance ([IO.File]::ReadAllText($config) -ceq $customConfig) 'Upgrade overwrote user system configuration.'
         Assert-Acceptance ((Get-Sha256 $extra) -ceq $extraHash) 'Upgrade modified an unowned file.'

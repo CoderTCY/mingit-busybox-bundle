@@ -32,21 +32,21 @@ function Resolve-Commit {
 }
 
 function Resolve-Lfs {
-    param($Release)
+    param($Release, [Parameter(Mandatory)][string]$Vendor, [switch]$ReleaseBinary)
     $tag = $Release.tag_name
-    $asset = Get-BundleAsset $Release "git-lfs-windows-amd64-$tag.zip"
-    $source = Get-BundleAsset $Release "git-lfs-vendor-$tag.tar.gz"
-    [ordered]@{
+    $result = [ordered]@{
         tag = $tag
         version = $tag.Substring(1)
         commit = Resolve-Commit 'git-lfs/git-lfs' $tag
         releaseId = $Release.id
-        assetId = $asset.assetId
-        name = $asset.name
-        url = $asset.url
-        sha256 = $asset.sha256
-        source = $source
+        vendor = $Vendor
+        source = Get-BundleAsset $Release "git-lfs-vendor-$tag.tar.gz"
     }
+    if ($ReleaseBinary) {
+        $asset = Get-BundleAsset $Release "git-lfs-windows-amd64-$tag.zip"
+        foreach ($key in $asset.Keys) { $result[$key] = $asset[$key] }
+    }
+    return $result
 }
 
 if (Test-Path -LiteralPath $OutputPath) { throw "Input snapshot already exists: $OutputPath. Reuse it for this run; choose a new output path for new resolution." }
@@ -61,7 +61,7 @@ $gitVersion = $gitRelease.tag_name.Substring(1).Replace('.windows.', '.')
 # Keep the four-part package/PE version separate from that naming convention.
 $assetVersion = $gitVersion -replace '\.1$', ''
 $baseline = Get-BundleAsset $gitRelease "MinGit-$assetVersion-busybox-64-bit.zip"
-$lfs = Resolve-Lfs $lfsRelease
+$lfs = Resolve-Lfs $lfsRelease -Vendor ("MinGitBusyBoxBundle.r" + $recipe.Substring(0,12))
 
 # Lock the highest older stable release for the real LFS-only upgrade fixture.
 $older = @()
@@ -79,13 +79,13 @@ while ($true) {
 }
 if ($older.Count -eq 0) { throw 'No older stable LFS release available for the upgrade gate' }
 $previous = $older | Sort-Object { [version]$_.tag_name.Substring(1) } -Descending | Select-Object -First 1
-$oldLfs = Resolve-Lfs $previous
+$oldLfs = Resolve-Lfs $previous -Vendor 'GitHub' -ReleaseBinary
 $patches = @(Get-ChildItem -LiteralPath (Join-Path $root 'patches') -Filter '*.patch' -File -ErrorAction SilentlyContinue | Sort-Object Name | ForEach-Object {
     [ordered]@{ path = "patches/$($_.Name)"; sha256 = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant() }
 })
-$expectedPatches = @('patches/0001-core-shell.patch', 'patches/0002-package-inputs.patch', 'patches/0003-busybox-unicode.patch', 'patches/0004-busybox-package-inputs.patch')
+$expectedPatches = @('patches/0001-core-shell.patch', 'patches/0002-package-inputs.patch', 'patches/0003-busybox-unicode.patch', 'patches/0004-busybox-package-inputs.patch', 'patches/0005-lfs-core-shell.patch')
 if (($patches.path -join "`n") -cne ($expectedPatches -join "`n")) {
-    throw 'All four reviewed Git and BusyBox patches are required'
+    throw 'All five reviewed Git, BusyBox and LFS patches are required'
 }
 $inputs = [ordered]@{
     schemaVersion = 1
