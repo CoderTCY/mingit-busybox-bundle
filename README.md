@@ -48,7 +48,7 @@ LFS 构建在独立 PowerShell 子进程中运行，源码回归使用的临时 
 
 默认安装到当前用户；同一安装器支持 `/CURRENTUSER` 和 `/ALLUSERS`。升级沿用同范围的原目录；改变范围或目录须先卸载，不自动卸载、迁移现有 Git。唯一可选项仅追加本产品的 `cmd` 到对应范围 PATH；原来已有的等价项不会被认领，其他 token 原文与顺序保留。安装后重新打开终端并运行 `where git`，其他 Git 可能仍在前面。
 
-卸载执行 PATH 与所有权清理时，重新从本产品持久化记录确认范围和目录，不依赖当前提权状态或较早卸载阶段的临时变量；只清理对应范围的自有记录。
+卸载从本产品持久化记录确认范围和目录，不依赖当前提权状态；只清理对应范围的自有记录。
 
 `etc/gitconfig.bundle` 是随版本更新的产品默认值。`etc/gitconfig` 只在首次缺失时创建，升级不覆盖、卸载不删除；仓库配置、用户 global config 和非产品文件不属于卸载范围。废弃产品文件仅按经过路径与 reparse-point 校验的旧清单差集删除。
 
@@ -63,6 +63,8 @@ LFS filters 已预设在产品 system config；最后一条仅在用户需要 LF
 ## 发布门禁
 
 工作流每日检测当时的上游最新稳定版，也支持固定 tag 的手动运行。PR 只构建和验证。两个全新 Windows runner 分别验收真正受限账户的 CurrentUser 和管理员 AllUsers 安装、真实旧 LFS 升级、PATH 所有权、卸载保留，以及同一 payload 的 shell alias、本地传输、hooks、重定位、中文/C locale、实际默认浏览器离线帮助和真实 LFS `file:///` 上传/clone 自动 checkout。
+
+卸载验收通过 `Start-Process -Wait` 等待 Inno 的整个两阶段进程树，再核对登记、PATH 和文件；仅等待注册的 `unins*.exe` 退出会早于第二阶段的 `usPostUninstall` 清理。外层验收仍有超时限制，不用固定延时或重试掩盖残留。
 
 浏览器夹具仅允许在 disposable GitHub runner 上运行：暂存并还原 Edge 的 per-user HTML 启动命令，使用独立 profile 收集真实桌面与 DOM/CSS 证据，不重写扩展名默认值或伪造 `UserChoice`。产品安装器不修改 Windows 默认浏览器；打开手册仍通过 `ShellExecuteW` 使用系统选择。
 

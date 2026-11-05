@@ -85,7 +85,13 @@ function Invoke-Uninstall {
     Assert-WithinRoot $exe $script:InstallDirectory
     $script:InstallerLogNumber++
     $log = Join-Path $ScratchRoot ('uninstall-{0:D3}.log' -f $script:InstallerLogNumber)
-    $null = Invoke-AcceptanceProcess -File $exe -Arguments @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', "/LOG=$log") -Directory $ScratchRoot -TimeoutSeconds 600
+    # Inno exits the registered EXE before its second phase runs usPostUninstall.
+    # The child uses Start-Process -Wait to join the complete process tree;
+    # this outer invocation retains our timeout and command evidence.
+    $null = Invoke-AcceptanceProcess -File (Join-Path $PSHOME 'pwsh.exe') -Arguments @(
+        '-NoProfile', '-File', (Join-Path $PSScriptRoot 'invoke-uninstall.ps1'),
+        '-Uninstaller', $exe, '-LogPath', $log
+    ) -Directory $ScratchRoot -TimeoutSeconds 600
     Assert-Acceptance ($null -eq (Get-ProductValues)) 'Product ownership registration survived uninstall.'
     $remaining = $script:TargetHive.OpenSubKey($script:UninstallKey)
     if ($remaining) { $remaining.Dispose(); throw 'Product uninstall registration survived uninstall.' }
