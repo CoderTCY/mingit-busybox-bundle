@@ -20,6 +20,8 @@ SDK 必须是官方 `setup-git-for-windows-sdk` 锁定提交的 `build-installer
 
 `patches/0001-core-shell.patch` 移植 Johannes Schindelin 的 [PR #3301](https://github.com/git-for-windows/git/pull/3301) 两个固定提交的生产改动，未引入其 mock-shell 测试。`patches/0002-package-inputs.patch` 适配固定的官方 split-package 配方；保留 gettext、Rust、TLS 和内部需要的 man 目标。构建版本带 `.busyboxbundle.<recipe>`，不是官方未修改二进制。
 
+Windows 的 `sh`、`bash` shebang 都使用已配置的 `core.shell`，不会因系统 PATH 中存在 `bash.exe` 而误启动 WSL。本包提供 BusyBox ash 支持的 shell 语法，不包含完整 GNU Bash。
+
 原生 BusyBox 不进行 MSYS 的参数路径转换；第一份补丁也在 Git 的 `file://` 解析边界把标准 Windows URI 的 `/C:/...` 转为原生 `C:/...`，保留其他协议、UNC 和 POSIX 路径的原有处理。
 
 BusyBox 同样从锁定的 `d8d8bb397f1e200ba5a871dc6aa4af819b23f32a` 重编：`0003-busybox-unicode.patch` 复用宽字符路径查询所有权，并启用[上游 UTF-8 manifest 模式](https://frippery.org/busybox/release-notes/FRP-5181.html)。安装器最低版本为 Windows 10 build 18362，BusyBox 自身也拒绝不支持该 manifest 的系统；保留原配方的 TLS、权限检查及其他功能，而非整体换用功能集不同的 defconfig。

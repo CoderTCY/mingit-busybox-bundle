@@ -22,15 +22,6 @@ $report = [ordered]@{ passed = $false; scope = $Scope; restrictedAccount = $null
 $user = $null
 $child = $null
 try {
-    # Preserve ancestor ACLs while the orchestrator can read them. The restricted
-    # child separately records its own access failures; neither changes rights.
-    $report.ancestorSecurity = @()
-    $ancestor = [IO.Directory]::GetParent($ScratchRoot)
-    while ($ancestor) {
-        $ancestorAcl = Get-Acl -LiteralPath $ancestor.FullName
-        $report.ancestorSecurity += @{ path = $ancestor.FullName; owner = $ancestorAcl.Owner; sddl = $ancestorAcl.Sddl }
-        $ancestor = $ancestor.Parent
-    }
     # The test account receives only offline artifacts and scripts, no build SDK/cache.
     $artifacts = Join-Path $ScratchRoot 'offline-artifacts'
     $scripts = Join-Path $artifacts 'tests'
@@ -66,9 +57,7 @@ try {
     $bootstrap = @'
 $ErrorActionPreference = 'Stop'
 $env:CI = 'true'
-$context = [ordered]@{ identity = $null; sid = $null; administrator = $null; inheritedEnvironment = @{}; effectiveEnvironment = @{} }
-$contextVariables = @('USERPROFILE', 'HOME', 'USERNAME', 'USERDOMAIN', 'HOMEDRIVE', 'HOMEPATH', 'APPDATA', 'LOCALAPPDATA', 'TEMP', 'TMP', 'COMSPEC', 'SystemRoot', '__COMPAT_LAYER')
-foreach ($name in $contextVariables) { $context.inheritedEnvironment[$name] = [Environment]::GetEnvironmentVariable($name) }
+$context = [ordered]@{ identity = $null; sid = $null; administrator = $null }
 # Resolve the loaded profile by the real token SID. Environment.GetFolderPath
 # can reuse inherited USERPROFILE/APPDATA values under secondary logon.
 $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
@@ -92,7 +81,7 @@ $env:LOCALAPPDATA = Join-Path $profile 'AppData/Local'
 $env:TEMP = Join-Path $env:LOCALAPPDATA 'Temp'
 $env:TMP = $env:TEMP
 [IO.Directory]::CreateDirectory($env:TEMP) | Out-Null
-foreach ($name in $contextVariables) { $context.effectiveEnvironment[$name] = [Environment]::GetEnvironmentVariable($name) }
+$context.profile = $profile
 [IO.File]::WriteAllText((Join-Path $PSScriptRoot 'launcher-context.json'), ($context | ConvertTo-Json -Depth 5), [Text.UTF8Encoding]::new($false))
 '@
     # CreateProcessWithLogonW limits its command line to 1024 characters.

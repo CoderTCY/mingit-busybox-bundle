@@ -5,10 +5,16 @@ Port of Git for Windows PR #3301:
 https://github.com/git-for-windows/git/pull/3301
 5907f977c89ac328533b4950ab5fdb66d9e704fe
 28f4250189a24d748494aab76feb1aac4000b221
-Rebased production context onto v2.56.0.windows.4; semantics unchanged.
+Rebased production context onto v2.56.0.windows.4, with bundle additions below.
 License: GPL-2.0-only, as the upstream Git source.
 The PR mock-shell diagnostic tests are not carried. Bundle acceptance uses
 real BusyBox shells, transports and hooks.
+
+Additional native interpreter correction by MinGit BusyBox Bundle
+maintainers: apply the configured shell to bare sh and bash lookup, including
+hook shebangs. Otherwise Windows System32/bash.exe can select the WSL launcher
+before the BusyBox applet fallback; CI 41950424224 reproduced that failure.
+Unconfigured shell lookup and explicit executable paths remain unchanged.
 
 Additional native file-transport correction by MinGit BusyBox Bundle
 maintainers: normalize the decoded file:///C:/... path to C:/... before
@@ -27,10 +33,10 @@ Signed-off-by: Johannes Schindelin <johannes.schindelin@gmx.de>
 ---
 
 diff --git a/Documentation/config/core.adoc b/Documentation/config/core.adoc
-index 4d40c16..2534291 100644
+index 4d40c16..5466ad0 100644
 --- a/Documentation/config/core.adoc
 +++ b/Documentation/config/core.adoc
-@@ -815,3 +815,7 @@ core.WSLCompat::
+@@ -815,3 +815,9 @@ core.WSLCompat::
  	The default value is false. When set to true, Git will set the mode
  	bits of the file in the way of wsl, so that the executable flag of
  	files can be set or read correctly.
@@ -38,15 +44,17 @@ index 4d40c16..2534291 100644
 +core.shell::
 +	Set the absolute path to the executable to use as a POSIX shell;
 +	This will also set/override the environment variable `SHELL`.
++	On Windows, this also selects the interpreter for `sh` and `bash`
++	shebangs instead of searching the host PATH for those names.
 diff --git a/compat/mingw.c b/compat/mingw.c
-index 9c5a514..377536e 100644
+index 9c5a514..ff6994e 100644
 --- a/compat/mingw.c
 +++ b/compat/mingw.c
 @@ -2005,6 +2005,10 @@ static char *path_lookup(const char *cmd, int exe_only)
  	if (strpbrk(cmd, "/\\"))
  		return xstrdup(cmd);
  
-+	if (!strcmp(cmd, "sh") &&
++	if ((!strcmp(cmd, "sh") || !strcmp(cmd, "bash")) &&
 +	    (prog = xstrdup_or_null(get_shell_path(NULL))))
 +		return prog;
 +
@@ -67,6 +75,7 @@ index 9c5a514..377536e 100644
  		if (!p)
  			ret = 0;
 diff --git a/connect.c b/connect.c
+index feb0420..b3a1b0f 100644
 --- a/connect.c
 +++ b/connect.c
 @@ -1156,6 +1156,13 @@ static enum url_scheme parse_connect_url(const char *url_orig, char **ret_host,

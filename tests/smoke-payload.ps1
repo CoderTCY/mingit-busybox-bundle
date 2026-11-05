@@ -10,7 +10,6 @@ param(
 )
 . "$PSScriptRoot/acceptance-common.ps1"
 . "$PSScriptRoot/browser-evidence.ps1"
-. "$PSScriptRoot/transport-diagnostics.ps1"
 $InstallRoot = [IO.Path]::GetFullPath($InstallRoot)
 $ScratchRoot = [IO.Path]::GetFullPath($ScratchRoot)
 Assert-Acceptance (-not (Test-Path -LiteralPath $ScratchRoot)) 'ScratchRoot must not already exist; evidence must not mix runs.'
@@ -94,14 +93,7 @@ function Test-CorePayload([string] $Root, [string] $Label) {
     $uri = [Uri]::new([IO.Path]::GetFullPath($source)).AbsoluteUri
     foreach ($transport in @(@{ Name = 'local'; Source = $trailing }, @{ Name = 'file'; Source = $uri })) {
         $clone = Join-Path $script:RunRoot ("clone $($transport.Name) 中文")
-        try {
-            $null = Invoke-Git @('clone', '--no-hardlinks', $transport.Source, $clone)
-        } catch {
-            $cloneFailure = $_
-            try { Save-TransportDiagnostics $Root $source $transport.Name }
-            catch { Write-Warning "Transport diagnostic capture also failed: $($_.Exception)" }
-            throw $cloneFailure
-        }
+        $null = Invoke-Git @('clone', '--no-hardlinks', $transport.Source, $clone)
         Assert-Acceptance ((Invoke-Git @('rev-parse', 'HEAD') $clone).stdout.Trim() -ceq $head) "#5469: $($transport.Name) clone HEAD differs."
         $refs = (Invoke-Git @('ls-remote', $transport.Source)).stdout
         Assert-Acceptance ($refs -match ('(?m)^' + [Regex]::Escape($head) + '\s+refs/heads/main\r?$')) "#5469: $($transport.Name) ls-remote lost main."
