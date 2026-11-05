@@ -99,7 +99,24 @@ function Wait-BrowserPage($State, [string] $LocalPath, [string] $TargetId = '') 
 }
 
 function Save-BrowserPageEvidence($State, [string] $LocalPath, [string] $OutputRoot, [string] $Name, [string] $TargetId = '') {
-    $target = Wait-BrowserPage $State $LocalPath $TargetId
+    [IO.Directory]::CreateDirectory($OutputRoot) | Out-Null
+    try { $target = Wait-BrowserPage $State $LocalPath $TargetId }
+    catch {
+        $originalFailure = $_
+        $diagnostics = [ordered]@{ expectedPath = $LocalPath; targets = @(); documents = @(); captureFailure = $null }
+        try {
+            $diagnostics.targets = @(Invoke-RestMethod "http://127.0.0.1:$($State.Port)/json/list" -TimeoutSec 5)
+            foreach ($pageTarget in ($diagnostics.targets | Where-Object type -EQ 'page')) {
+                $observation = Invoke-BrowserProtocol $pageTarget.webSocketDebuggerUrl 'Runtime.evaluate' @{ expression = '({url:location.href,title:document.title,ready:document.readyState,visible:document.visibilityState})'; returnByValue = $true }
+                $diagnostics.documents += @{ targetId = $pageTarget.id; observation = $observation }
+            }
+        } catch { $diagnostics.captureFailure = $_.Exception.ToString() }
+        Write-Utf8 (Join-Path $OutputRoot 'browser-failure.json') ($diagnostics | ConvertTo-Json -Depth 12)
+        try {
+            $null = Invoke-AcceptanceProcess -File (Join-Path $env:SystemRoot 'System32/WindowsPowerShell/v1.0/powershell.exe') -Arguments @('-NoProfile', '-File', (Join-Path $PSScriptRoot 'capture-browser-diagnostics.ps1'), '-OutputRoot', $OutputRoot) -Directory $OutputRoot -TimeoutSeconds 60
+        } catch { Write-Warning "Native browser diagnostic capture failed: $($_.Exception)" }
+        throw $originalFailure
+    }
     $expression = @'
 JSON.stringify({url:location.href,title:document.title,text:document.body.innerText,
   visible:document.visibilityState, width:innerWidth,height:innerHeight,
@@ -118,7 +135,6 @@ JSON.stringify({url:location.href,title:document.title,text:document.body.innerT
     Assert-Acceptance (@($page.images | Where-Object { -not $_.loaded }).Count -eq 0) 'Manual contains failed image loads.'
     Assert-Acceptance (@($page.styles | Where-Object { $_.href -and $_.href -notlike 'file:*' }).Count -eq 0) 'Manual loaded a nonlocal stylesheet.'
     Assert-Acceptance (@($page.resources | Where-Object { $_ -match '^https?://' }).Count -eq 0) 'Offline manual attempted to load an HTTP(S) resource.'
-    [IO.Directory]::CreateDirectory($OutputRoot) | Out-Null
     $screenshot = Join-Path $OutputRoot "$Name.png"
     $null = Invoke-AcceptanceProcess -File (Join-Path $env:SystemRoot 'System32/WindowsPowerShell/v1.0/powershell.exe') -Arguments @('-NoProfile', '-File', (Join-Path $PSScriptRoot 'capture-browser-window.ps1'), '-BrowserProcessId', "$($State.Process.Id)", '-ExpectedPath', $LocalPath, '-OutputPath', $screenshot) -Directory $OutputRoot -TimeoutSeconds 60
     Write-Utf8 (Join-Path $OutputRoot "$Name.json") ($page | ConvertTo-Json -Depth 8)
