@@ -1,6 +1,6 @@
 # MinGit BusyBox Bundle
 
-非官方 Windows 10/11 原生 x64 离线整合安装器：重编的 MinGit (BusyBox)、Git LFS、同源 Git HTML 手册和全部 native Git gettext catalogs。自有整合代码采用 GPL-2.0-only；第三方代码保留原作者与许可。
+非官方 Windows 10 1903+ / Windows 11 原生 x64 离线整合安装器：重编的 MinGit (BusyBox)、Git LFS、同源 Git HTML 手册和全部 native Git gettext catalogs。自有整合代码采用 GPL-2.0-only；第三方代码保留原作者与许可。
 
 ## 构建输入
 
@@ -21,6 +21,10 @@ SDK 必须是官方 `setup-git-for-windows-sdk` 锁定提交的 `build-installer
 `patches/0001-core-shell.patch` 移植 Johannes Schindelin 的 [PR #3301](https://github.com/git-for-windows/git/pull/3301) 两个固定提交的生产改动，未引入其 mock-shell 测试。`patches/0002-package-inputs.patch` 适配固定的官方 split-package 配方；保留 gettext、Rust、TLS 和内部需要的 man 目标。构建版本带 `.busyboxbundle.<recipe>`，不是官方未修改二进制。
 
 原生 BusyBox 不进行 MSYS 的参数路径转换；第一份补丁也在 Git 的 `file://` 解析边界把标准 Windows URI 的 `/C:/...` 转为原生 `C:/...`，保留其他协议、UNC 和 POSIX 路径的原有处理。
+
+BusyBox 同样从锁定的 `d8d8bb397f1e200ba5a871dc6aa4af819b23f32a` 重编：`0003-busybox-unicode.patch` 复用宽字符路径查询所有权，并启用[上游 UTF-8 manifest 模式](https://frippery.org/busybox/release-notes/FRP-5181.html)。安装器最低版本为 Windows 10 build 18362，BusyBox 自身也拒绝不支持该 manifest 的系统；保留原配方的 TLS、权限检查及其他功能，而非整体换用功能集不同的 defconfig。
+
+ash 默认启用已有的 `winxp` 选项，仅为保留继承环境变量的反斜线与转义，不表示支持 Windows XP；需要旧式自动路径转换时仍可显式使用 `+X`。这样不会把 `GIT_CONFIG_PARAMETERS` 的转义改成 `/`。`0004-busybox-package-inputs.patch` 复用官方 BusyBox 配方，固定源码与补丁校验和，使用原生 `EXTRAVERSION` 标出 `.busyboxbundle.<recipe>`；Git 和 BusyBox 均附本次构建的完整 `--allsource` 归档。
 
 稳定源码中的 `t0061` 有两处后台命令没有分组，会破坏测试自身的动态 `&&` 链检查。第一份补丁同时修正这两处测试语法，保留 poll-limit 的全部断言；不禁用链检查。源码回归入口为 `make test T=t0061-run-command.sh`，不能代替安装后的 BusyBox/LFS/locale/帮助验收。
 

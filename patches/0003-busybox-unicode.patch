@@ -1,5 +1,5 @@
 From: MinGit BusyBox Bundle maintainers
-Subject: [PATCH] win32: query file ownership through the existing wide path
+Subject: [PATCH] win32: preserve Unicode paths and inherited shell values
 
 Based on git-for-windows/busybox-w32
  d8d8bb397f1e200ba5a871dc6aa4af819b23f32a.
@@ -9,21 +9,60 @@ Source: https://github.com/git-for-windows/busybox-w32
 Upstream: https://github.com/rmyorston/busybox-w32
 Bundle integration changes: GPL-2.0-only; upstream attribution is unchanged.
 
-The stat implementation already resolves file_name from UTF-8 into wpath
-and uses wide APIs for attributes and compressed size. Its READ_CONTROL
-handle still used CreateFileA, decoding the UTF-8 filename with the ANSI
-code page. For Chinese filenames this failed, selected the existing
-uid/gid zero fallback, and cleared other permissions. Nonadministrator ash
-then rejected otherwise executable native children. CI 41929624612 showed
-identical executable bytes and Windows owner/SDDL producing mode 755 for
-an ASCII filename but 750 for its Chinese sibling.
+CI 41929624612 showed identical executable bytes and Windows owner/SDDL
+producing mode 755 for an ASCII filename but 750 for its Chinese sibling.
+Reuse the already converted wpath with CreateFileW for READ_CONTROL, keeping
+all owner checks, reparse handling and failure behavior. CI 41934339387 then
+passed nonadministrator Unicode-path local clone and ls-remote.
 
-Reuse wpath with CreateFileW. Retain READ_CONTROL, reparse-point handling,
-owner checks, failure behavior and all mingw64_defconfig features. No new
-conversion, allocation, manifest requirement or permission bypass is needed.
-The existing real Unicode-path clone, hook and LFS gates remain unchanged.
+That run also captured UTF-8 shell PATH becoming mojibake in a native child,
+and backslash escapes in GIT_CONFIG_PARAMETERS becoming forward slashes.
+Use upstream's UTF-8 manifest mode, with an explicit Windows 10 1903+ floor
+and rejection when unsupported. Keep all other mingw64_defconfig features,
+including the existing TLS backend and permission metadata. Preserve the
+UCRT NULL-environment workaround rather than reintroducing upstream #234.
+
+Default the existing winxp option on so imported values remain opaque.
+This is a path-conversion option, not Windows XP platform support. Explicit
++X remains available. No Git-specific environment-variable exception is used.
+Upstream option/manifest rationale:
+https://frippery.org/busybox/release-notes/FRP-5181.html
+The real Unicode-path clone, nested alias, hook and LFS gates remain required.
 ---
 
+diff --git a/configs/mingw64_defconfig b/configs/mingw64_defconfig
+index 97aac7f..d09968c 100644
+--- a/configs/mingw64_defconfig
++++ b/configs/mingw64_defconfig
+@@ -48,9 +48,9 @@ CONFIG_GLOBBING=y
+ CONFIG_FEATURE_RESOURCES=y
+ CONFIG_FEATURE_VERSIONINFO=y
+ # CONFIG_FEATURE_TOOLCHAIN_MANIFEST is not set
+-CONFIG_FEATURE_APP_MANIFEST=y
+-# CONFIG_FEATURE_UTF8_MANIFEST is not set
+-# CONFIG_FEATURE_FAIL_IF_UTF8_MANIFEST_UNSUPPORTED is not set
++# CONFIG_FEATURE_APP_MANIFEST is not set
++CONFIG_FEATURE_UTF8_MANIFEST=y
++CONFIG_FEATURE_FAIL_IF_UTF8_MANIFEST_UNSUPPORTED=y
+ CONFIG_FEATURE_ICON=y
+ # CONFIG_FEATURE_ICON_ATERM is not set
+ # CONFIG_FEATURE_ICON_STERM is not set
+diff --git a/shell/ash.c b/shell/ash.c
+index 7fb5af8..cdb0b7d 100644
+--- a/shell/ash.c
++++ b/shell/ash.c
+@@ -16574,6 +16574,11 @@ procargs(char **xargv)
+ 	argptr = xargv;
+ 	for (i = 0; i < NOPTS; i++)
+ 		optlist[i] = 2;
++#if ENABLE_PLATFORM_MINGW32
++	/* Preserve opaque inherited values, including native command escapes.
++	 * Users may still request slash conversion explicitly with +X. */
++	winxp = 1;
++#endif
+ 	if (options(&login_sh)) {
+ 		/* it already printed err message */
+ 		raise_exception(EXERROR); /* does not return */
 diff --git a/win32/mingw.c b/win32/mingw.c
 index aaf041e..abad6f2 100644
 --- a/win32/mingw.c
