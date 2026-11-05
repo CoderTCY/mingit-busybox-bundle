@@ -16,7 +16,7 @@ gh workflow run release.yml --repo CoderTCY/mingit-busybox-bundle -f git_tag=v2.
 
 工作流调用同一组 `scripts/resolve-inputs.ps1`、`scripts/build.ps1` 和 `tests/invoke-verify.ps1` 入口。同一次 GitHub run 重跑复用原始输入 artifact；同一已发布身份成功跳过，不覆盖公开资产。
 
-SDK 必须是官方 `setup-git-for-windows-sdk` 锁定提交的 `build-installers` flavor，使用 `MSYSTEM=UCRT64`、`MINGW_PREFIX=/ucrt64`。编译目录不得含空格；最终安装目录支持空格与中文。所有产物在被忽略的 `build/work/`、`build/payload/`、`build/test-results/` 和 `dist/`，不得提交二进制、缓存或凭据。
+SDK 使用官方 `setup-git-for-windows-sdk` 锁定提交的 `full` flavor，使用 `MSYSTEM=UCRT64`、`MINGW_PREFIX=/ucrt64`。编译目录不得含空格；最终安装目录支持空格与中文。所有产物在被忽略的 `build/work/`、`build/payload/`、`build/test-results/` 和 `dist/`，不得提交二进制、缓存或凭据。
 
 `patches/0001-core-shell.patch` 移植 Johannes Schindelin 的 [PR #3301](https://github.com/git-for-windows/git/pull/3301) 两个固定提交的生产改动，未引入其 mock-shell 测试。`patches/0002-package-inputs.patch` 适配固定的官方 split-package 配方；保留 gettext、Rust、TLS 和内部需要的 man 目标。构建版本带 `.busyboxbundle.<recipe>`，不是官方未修改二进制。
 
