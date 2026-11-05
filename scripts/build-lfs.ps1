@@ -189,5 +189,12 @@ try {
 }
 finally {
     Pop-Location
-    foreach ($name in $savedEnvironment.Keys) { [Environment]::SetEnvironmentVariable($name, $savedEnvironment[$name], 'Process') }
+    foreach ($name in $savedEnvironment.Keys) {
+        # An empty GIT_DIR is not equivalent to an unset GIT_DIR.
+        if ($null -eq $savedEnvironment[$name]) {
+            [Environment]::SetEnvironmentVariable($name, $null, 'Process')
+        } else {
+            [Environment]::SetEnvironmentVariable($name, $savedEnvironment[$name], 'Process')
+        }
+    }
 }
