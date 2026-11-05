@@ -30,7 +30,7 @@ ash 默认启用已有的 `winxp` 选项，仅为保留继承环境变量的反�
 
 稳定源码中的 `t0061` 有两处后台命令没有分组，会破坏测试自身的动态 `&&` 链检查。第一份补丁同时修正这两处测试语法，保留 poll-limit 的全部断言；不禁用链检查。源码回归入口为 `make test T=t0061-run-command.sh`，不能代替安装后的 BusyBox/LFS/locale/帮助验收。
 
-SDK 子集可能保留 pacman 登记而裁掉实际工具或 DLL。构建入口从官方包恢复 MSYS Git、pacman、HTTPS 依赖、完整 GCC/CRT 及 Cargo 所需 SQLite，再执行官方配方；不以 `NO_RUST` 或 `NO_GETTEXT` 绕过缺依赖。离线手册使用 Asciidoctor 的 `webfonts!` 属性，不引用远程字体。
+CI 通过固定的官方 SDK Action 使用 `full` flavor；旧 `build-installers` 子集生成器不兼容 SDK 的 `docx2txt` → `docx2txt-rs` 换包，会在缺少签名工具的中间状态生成不完整 SDK。完整检出避免该路径，不禁用 pacman 签名校验。构建入口仍检查实际工具与 DLL，并从官方包补齐缺失依赖，不以 `NO_RUST` 或 `NO_GETTEXT` 绕过错误。离线手册使用 Asciidoctor 的 `webfonts!` 属性，不引用远程字体。
 
 LFS 从官方 `git-lfs-vendor-<tag>.tar.gz`（含 vendored modules）重编，不使用目标版本的官方二进制代替。`0005-lfs-core-shell.patch` 让 Windows shell 调用通过 `git var GIT_SHELL_PATH` 取得 `core.shell`，涵盖 custom/file transfer 和需要 shell 的 SSH 路径；查询或配置的 shell 不可用时失败，不回退外部 `sh`。安装树仍只有原定 `ash.exe` 入口。
 
