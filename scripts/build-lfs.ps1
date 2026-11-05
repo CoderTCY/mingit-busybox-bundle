@@ -177,7 +177,7 @@ try {
         documentationRoot = 'work/lfs-build/documentation'
         documentationToolchain = Get-Content -LiteralPath (Join-Path $work 'documentation-toolchain.txt')
         git = $gitVersion
-        sourceTestShell = $shellPath
+        sourceTestShell = [IO.Path]::GetRelativePath($SdkRoot, $shellPath).Replace('\', '/')
         sourceTestPackages = @('./subprocess', './ssh', './tq', './lfshttp')
         versionOutput = $versionOutput
         binarySha256 = (Get-FileHash -LiteralPath $binary -Algorithm SHA256).Hash.ToLowerInvariant()

@@ -12,11 +12,11 @@ commit=$4
 export PATH="/ucrt64/bin:/usr/bin:$PATH"
 command -v asciidoctor
 command -v ruby
+# The full SDK package inventory is recorded once in build-manifest.json.sdkPackages.
 {
     asciidoctor --version
     ruby --version
     msgfmt --version
-    pacman -Q
 } >"$work/documentation-toolchain.txt"
 cd "$source_root"
 make man VERSION="$tag" GIT_LFS_SHA="$commit" ASCIIDOCTOR="$(command -v asciidoctor)" ASCIIDOCTOR_EXTRA_ARGS='-a reproducible -a webfonts!'

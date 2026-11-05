@@ -48,6 +48,8 @@ LFS 构建在独立 PowerShell 子进程中运行，源码回归使用的临时 
 
 正式 Release 的可安装产物只有一个 x64 EXE。Git、BusyBox、Git LFS、HTML 手册和 native gettext catalogs 全部内嵌且必装；安装期间不下载组件、不调用 LFS 或 Git 的其他安装器。其余 `inputs.json`、`build-manifest.json`、`sources.zip`、`SHA256SUMS` 为审计与对应源码附件。
 
+公开 manifest 保留完整输入、组件来源和 payload 文件哈希。`components.lfsBuild.sourceTestShell` 是相对于 SDK 根目录、使用 `/` 分隔的路径，不记录构建机的绝对 SDK 位置。完整 SDK 包清单统一记录在顶层 `sdkPackages`；LFS 的 `documentationToolchain` 仅保留 Asciidoctor、Ruby、msgfmt 的版本命令输出，不重复嵌入包清单。源码附件中的 LFS 构建记录采用同一格式。
+
 默认安装到当前用户；同一安装器支持 `/CURRENTUSER` 和 `/ALLUSERS`。升级沿用同范围的原目录；改变范围或目录须先卸载，不自动卸载、迁移现有 Git。唯一可选项仅追加本产品的 `cmd` 到对应范围 PATH；原来已有的等价项不会被认领，其他 token 原文与顺序保留。安装后重新打开终端并运行 `where git`，其他 Git 可能仍在前面。
 
 卸载从本产品持久化记录确认范围和目录，不依赖当前提权状态；只清理对应范围的自有记录。
