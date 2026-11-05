@@ -1,41 +1,60 @@
 # Uses the runner's existing real Edge browser, never a replacement opener/browser.
-# A disposable profile and per-user HTML association route ShellExecute to that browser.
+# A disposable Edge profile and its real HTML ProgID keep ShellExecute observable.
 function Start-AcceptanceBrowser([string] $Root) {
+    Assert-Acceptance ($env:GITHUB_ACTIONS -eq 'true') 'Default-browser fixtures require a disposable GitHub runner.'
     $edge = @("${env:ProgramFiles(x86)}\Microsoft\Edge\Application\msedge.exe", "$env:ProgramFiles\Microsoft\Edge\Application\msedge.exe") | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
     Assert-Acceptance ([bool]$edge) 'Real Microsoft Edge is required for automated offline UI evidence.'
+    if (-not ('BundleBrowserAssociation' -as [type])) {
+        Add-Type @'
+using System;
+using System.Runtime.InteropServices;
+public static class BundleBrowserAssociation {
+    [DllImport("shell32.dll")]
+    public static extern void SHChangeNotify(uint eventId, uint flags, IntPtr item1, IntPtr item2);
+}
+'@
+    }
     $listener = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, 0)
     $listener.Start()
     $port = $listener.LocalEndpoint.Port
     $listener.Stop()
     $profile = Join-Path $Root 'browser-profile'
-    $state = @{ Port = $port; Profile = $profile; Registry = @(); Process = $null; ProgId = ('MinGitBundleAcceptanceHtml.' + [Guid]::NewGuid().ToString('N')) }
+    $state = @{ Port = $port; Profile = $profile; Registry = @(); Process = $null; ChoiceChecked = $false }
     try {
-    $classes = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey('Software\Classes')
-    try {
-        foreach ($extension in @('.html', '.htm')) {
-            $prior = $classes.OpenSubKey($extension)
-            $keyExisted = $null -ne $prior
+        $info = [Diagnostics.ProcessStartInfo]::new($edge)
+        $info.UseShellExecute = $false
+        foreach ($argument in @("--user-data-dir=$profile", "--remote-debugging-port=$port", '--no-first-run', '--no-default-browser-check', '--disable-background-networking', '--proxy-server=http://127.0.0.1:9', '--proxy-bypass-list=<-loopback>', 'about:blank')) { $info.ArgumentList.Add($argument) }
+        $state.Process = [Diagnostics.Process]::Start($info)
+        $deadline = [DateTime]::UtcNow.AddSeconds(45)
+        $ready = $false
+        do {
+            try { $null = Invoke-RestMethod "http://127.0.0.1:$port/json/version" -TimeoutSec 2; $ready = $true; break } catch { Start-Sleep -Milliseconds 300 }
+        } while ([DateTime]::UtcNow -lt $deadline)
+        Assert-Acceptance $ready 'Real browser did not expose its local inspection endpoint.'
+
+        # Do not rewrite extension defaults or fabricate a UserChoice hash.
+        # The native chooser selects Edge; temporarily configure its actual
+        # ProgID command so that selection reaches this existing real profile.
+        $commandPath = 'Software\Classes\MSEdgeHTM\shell\open\command'
+        foreach ($path in @('Software\Classes\MSEdgeHTM', 'Software\Classes\MSEdgeHTM\shell', 'Software\Classes\MSEdgeHTM\shell\open', $commandPath)) {
+            $prior = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey($path)
+            $saved = @{ Path = $path; KeyExisted = $null -ne $prior; Values = @() }
             if ($prior) { $prior.Dispose() }
-            $key = $classes.CreateSubKey($extension)
-            $exists = '' -in $key.GetValueNames()
-            $kind = if ($exists) { $key.GetValueKind('') } else { [Microsoft.Win32.RegistryValueKind]::String }
-            $state.Registry += @{ Extension = $extension; KeyExisted = $keyExisted; Exists = $exists; Kind = $kind; Value = $key.GetValue('', $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames) }
-            $key.SetValue('', $state.ProgId, [Microsoft.Win32.RegistryValueKind]::String)
-            $key.Dispose()
+            $state.Registry += $saved
+            $key = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey($path)
+            try {
+                if ($path -ceq $commandPath) {
+                    foreach ($name in @('', 'DelegateExecute')) {
+                        $exists = $name -in $key.GetValueNames()
+                        $saved.Values += @{ Name = $name; Exists = $exists; Kind = $(if ($exists) { $key.GetValueKind($name) } else { [Microsoft.Win32.RegistryValueKind]::String }); Value = $key.GetValue($name, $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames) }
+                    }
+                    $key.SetValue('', ('"{0}" --user-data-dir="{1}" --remote-debugging-port={2} --no-first-run --no-default-browser-check --proxy-server="http://127.0.0.1:9" --proxy-bypass-list="<-loopback>" "%1"' -f $edge, $profile, $port), [Microsoft.Win32.RegistryValueKind]::String)
+                    $key.SetValue('DelegateExecute', '', [Microsoft.Win32.RegistryValueKind]::String)
+                }
+            } finally { $key.Dispose() }
         }
-        $command = $classes.CreateSubKey("$($state.ProgId)\shell\open\command")
-        $command.SetValue('', ('"{0}" --user-data-dir="{1}" --remote-debugging-port={2} --no-first-run --proxy-server="http://127.0.0.1:9" --proxy-bypass-list="<-loopback>" "%1"' -f $edge, $profile, $port))
-        $command.Dispose()
-    } finally { $classes.Dispose() }
-    $info = [Diagnostics.ProcessStartInfo]::new($edge)
-    $info.UseShellExecute = $false
-    foreach ($argument in @("--user-data-dir=$profile", "--remote-debugging-port=$port", '--no-first-run', '--no-default-browser-check', '--disable-background-networking', '--proxy-server=http://127.0.0.1:9', '--proxy-bypass-list=<-loopback>', 'about:blank')) { $info.ArgumentList.Add($argument) }
-    $state.Process = [Diagnostics.Process]::Start($info)
-    $deadline = [DateTime]::UtcNow.AddSeconds(45)
-    do {
-        try { $null = Invoke-RestMethod "http://127.0.0.1:$port/json/version" -TimeoutSec 2; return $state } catch { Start-Sleep -Milliseconds 300 }
-    } while ([DateTime]::UtcNow -lt $deadline)
-    throw 'Real browser did not expose its local inspection endpoint.'
+        [BundleBrowserAssociation]::SHChangeNotify(0x08000000, 0, [IntPtr]::Zero, [IntPtr]::Zero)
+        return $state
     } catch {
         Stop-AcceptanceBrowser $state
         throw
@@ -47,14 +66,19 @@ function Stop-AcceptanceBrowser($State) {
     try {
         if ($State.Process -and -not $State.Process.HasExited) { $State.Process.Kill($true); $State.Process.WaitForExit() }
     } finally {
-        foreach ($saved in $State.Registry) {
-            $key = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey("Software\Classes\$($saved.Extension)")
-            if ($saved.Exists) { $key.SetValue('', $saved.Value, $saved.Kind) } else { $key.DeleteValue('', $false) }
-            $removeKey = -not $saved.KeyExisted -and $key.ValueCount -eq 0 -and $key.SubKeyCount -eq 0
-            $key.Dispose()
-            if ($removeKey) { [Microsoft.Win32.Registry]::CurrentUser.DeleteSubKey("Software\Classes\$($saved.Extension)", $false) }
+        for ($i = $State.Registry.Count - 1; $i -ge 0; $i--) {
+            $saved = $State.Registry[$i]
+            $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey($saved.Path, $true)
+            if (-not $key) { continue }
+            try {
+                foreach ($value in $saved.Values) {
+                    if ($value.Exists) { $key.SetValue($value.Name, $value.Value, $value.Kind) } else { $key.DeleteValue($value.Name, $false) }
+                }
+                $removeKey = -not $saved.KeyExisted -and $key.ValueCount -eq 0 -and $key.SubKeyCount -eq 0
+            } finally { $key.Dispose() }
+            if ($removeKey) { [Microsoft.Win32.Registry]::CurrentUser.DeleteSubKey($saved.Path, $false) }
         }
-        [Microsoft.Win32.Registry]::CurrentUser.DeleteSubKeyTree("Software\Classes\$($State.ProgId)", $false)
+        [BundleBrowserAssociation]::SHChangeNotify(0x08000000, 0, [IntPtr]::Zero, [IntPtr]::Zero)
         if ($State.Process) { $State.Process.Dispose() }
     }
 }
@@ -87,7 +111,7 @@ function Wait-BrowserPage($State, [string] $LocalPath, [string] $TargetId = '') 
     $expected = [Uri]::new([IO.Path]::GetFullPath($LocalPath)).AbsoluteUri
     $deadline = [DateTime]::UtcNow.AddSeconds(40)
     do {
-        $targets = @(Invoke-RestMethod "http://127.0.0.1:$($State.Port)/json/list" -TimeoutSec 5)
+        $targets = Invoke-RestMethod "http://127.0.0.1:$($State.Port)/json/list" -TimeoutSec 5
         $matches = @($targets | Where-Object { $_.type -eq 'page' -and (-not $TargetId -or $_.id -eq $TargetId) -and [Uri]::UnescapeDataString($_.url).TrimEnd('/') -ieq [Uri]::UnescapeDataString($expected).TrimEnd('/') })
         foreach ($target in $matches) {
             $ready = Invoke-BrowserProtocol $target.webSocketDebuggerUrl 'Runtime.evaluate' @{ expression = "document.readyState==='complete' && document.visibilityState==='visible'"; returnByValue = $true }
@@ -100,12 +124,18 @@ function Wait-BrowserPage($State, [string] $LocalPath, [string] $TargetId = '') 
 
 function Save-BrowserPageEvidence($State, [string] $LocalPath, [string] $OutputRoot, [string] $Name, [string] $TargetId = '') {
     [IO.Directory]::CreateDirectory($OutputRoot) | Out-Null
-    try { $target = Wait-BrowserPage $State $LocalPath $TargetId }
+    try {
+        if (-not $State.ChoiceChecked) {
+            $null = Invoke-AcceptanceProcess -File (Join-Path $env:SystemRoot 'System32/WindowsPowerShell/v1.0/powershell.exe') -Arguments @('-NoProfile', '-File', (Join-Path $PSScriptRoot 'select-default-browser.ps1'), '-OutputPath', (Join-Path $OutputRoot 'default-browser-choice.json')) -Directory $OutputRoot -TimeoutSeconds 30
+            $State.ChoiceChecked = $true
+        }
+        $target = Wait-BrowserPage $State $LocalPath $TargetId
+    }
     catch {
         $originalFailure = $_
         $diagnostics = [ordered]@{ expectedPath = $LocalPath; targets = @(); documents = @(); captureFailure = $null }
         try {
-            $diagnostics.targets = @(Invoke-RestMethod "http://127.0.0.1:$($State.Port)/json/list" -TimeoutSec 5)
+            $diagnostics.targets = Invoke-RestMethod "http://127.0.0.1:$($State.Port)/json/list" -TimeoutSec 5
             foreach ($pageTarget in ($diagnostics.targets | Where-Object type -EQ 'page')) {
                 $observation = Invoke-BrowserProtocol $pageTarget.webSocketDebuggerUrl 'Runtime.evaluate' @{ expression = '({url:location.href,title:document.title,ready:document.readyState,visible:document.visibilityState})'; returnByValue = $true }
                 $diagnostics.documents += @{ targetId = $pageTarget.id; observation = $observation }
