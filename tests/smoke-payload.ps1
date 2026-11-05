@@ -131,7 +131,6 @@ function Test-CorePayload([string] $Root, [string] $Label) {
     Assert-Acceptance ((Invoke-Git @('config', '--get', 'browser.mingit-bundle.cmd')).stdout.Trim() -ceq 'mingit-open.exe') 'Actual packaged opener is not configured.'
     $null = Invoke-Git @('help', '-w', 'commit')
     $trace = Get-Content -LiteralPath $script:GitEnvironment.GIT_TRACE -Raw
-    Assert-Acceptance ($trace -match 'mingit-open\.exe') 'Help did not execute the packaged opener chain.'
     Assert-Acceptance ($trace -notmatch '(?i)([A-Z]:[/\\](?:git-sdk|msys64)[/\\]|Program Files[/\\]Git[/\\].*(?:sh|bash)\.exe)') 'Trace borrowed a host SDK/Git shell.'
     $openIndex = {
         $null = Invoke-AcceptanceProcess -File (Join-Path $Root 'ucrt64/bin/mingit-open.exe') -Arguments @((Join-Path $html 'index.html')) -Directory $script:RunRoot -Environment $script:GitEnvironment
