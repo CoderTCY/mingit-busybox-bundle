@@ -36,6 +36,8 @@ LFS 从官方 `git-lfs-vendor-<tag>.tar.gz`（含 vendored modules）重编，�
 
 LFS 保留上游语义版本，通过原有 `config.Vendor=MinGitBusyBoxBundle.r<recipe>` 与完整 `config.GitCommit` 链接字段明确标识自定义构建。Go 1.27.3、Windows 资源生成器及其源码依赖均有固定 SHA-256；文档复用 SDK 的 Ruby/Asciidoctor。构建使用 vendor 模式，禁止隐式模块或工具链下载，保留 Windows 资源、内置帮助与翻译生成步骤。
 
+LFS 构建在独立 PowerShell 子进程中运行，源码回归使用的临时 Git/Go 环境不会进入后续 payload 合成；不依靠易混淆的空字符串来恢复未设置的 `GIT_*` 变量。
+
 来源附件包括原始 LFS vendor 归档、第五份补丁、构建记录、对应 Go runtime 源码和资源生成器源码；随包提供 Go 与 LFS/vendor notices。只有较旧 LFS 升级 fixture 使用经过校验的官方 ZIP，绝不作为主安装包的回退，也不会公开发布该 fixture。
 
 固定 Action 不能冻结整个滚动 SDK；构建记录实际 pacman 包和 compiler 版本，不承诺字节级可复现。产品没有可信代码签名证书，安装器为未签名自定义构建，不是 Git for Windows 官方签名发行版。

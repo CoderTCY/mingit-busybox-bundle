@@ -78,13 +78,11 @@ foreach ($package in $generatorPackages) {
 }
 $toolBin = Join-Path $work 'bin'
 [IO.Directory]::CreateDirectory($toolBin) | Out-Null
-# Restore every modified process variable so later payload assembly sees its own
-# configuration, rather than this source-test-only shell override.
+# This standalone builder runs in its own PowerShell process. Its source-test
+# environment must never leak into the orchestrator's payload/export steps.
 $environmentNames = @('PATH', 'GOROOT', 'GOPATH', 'GOCACHE', 'GOMODCACHE', 'GOTOOLCHAIN', 'GOENV', 'GOFLAGS', 'GOWORK', 'GOPROXY', 'GOSUMDB', 'GO111MODULE', 'GOOS', 'GOARCH', 'GOAMD64', 'GOEXPERIMENT', 'CGO_ENABLED', 'HOME', 'USERPROFILE', 'XDG_CONFIG_HOME', 'GIT_CONFIG_NOSYSTEM', 'GIT_CONFIG_SYSTEM', 'GIT_CONFIG_GLOBAL', 'GIT_CONFIG_COUNT', 'GIT_CONFIG_PARAMETERS', 'GIT_CEILING_DIRECTORIES', 'GIT_DIR', 'GIT_WORK_TREE', 'GIT_EXEC_PATH', 'SHELL', 'MSYSTEM', 'CHERE_INVOKING')
 $environmentNames += @(Get-ChildItem Env: | Where-Object Name -Match '^GIT_CONFIG_(KEY|VALUE)_[0-9]+$' | ForEach-Object Name)
 $environmentNames += @('GIT_CONFIG_KEY_0', 'GIT_CONFIG_VALUE_0')
-$savedEnvironment = @{}
-foreach ($name in ($environmentNames | Select-Object -Unique)) { $savedEnvironment[$name] = [Environment]::GetEnvironmentVariable($name, 'Process') }
 Push-Location $sourceRoot
 try {
     foreach ($name in $environmentNames) { [Environment]::SetEnvironmentVariable($name, $null, 'Process') }
@@ -189,12 +187,4 @@ try {
 }
 finally {
     Pop-Location
-    foreach ($name in $savedEnvironment.Keys) {
-        # An empty GIT_DIR is not equivalent to an unset GIT_DIR.
-        if ($null -eq $savedEnvironment[$name]) {
-            [Environment]::SetEnvironmentVariable($name, $null, 'Process')
-        } else {
-            [Environment]::SetEnvironmentVariable($name, $savedEnvironment[$name], 'Process')
-        }
-    }
 }
