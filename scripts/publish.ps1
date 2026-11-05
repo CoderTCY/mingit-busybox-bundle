@@ -92,9 +92,12 @@ CurrentUser and AllUsers lifecycle, isolated payload, LFS roundtrip, offline bro
 
 The other attachments are fixed inputs, provenance, SHA-256 checksums and corresponding source, not separate installers. The installer is not code-signed and may trigger Windows SmartScreen.
 "@
-    Invoke-BundleNative 'gh' @('release', 'create', $inputs.releaseTag, '--repo', $Repository, '--target', $inputs.recipeCommit, '--draft', '--title', "MinGit BusyBox Bundle $($inputs.appVersion)", '--notes', $notes)
-    $release = Get-BundleRelease $Repository $inputs.releaseTag
-    if ($null -eq $release -or -not $release.draft) { throw 'New release was not created as a draft' }
+    # Bind subsequent mutations to the ID returned by creation. A just-created
+    # draft need not already be discoverable through the paginated release list.
+    $created = & gh api --method POST "repos/$Repository/releases" --raw-field "tag_name=$($inputs.releaseTag)" --raw-field "target_commitish=$($inputs.recipeCommit)" --field 'draft=true' --raw-field "name=MinGit BusyBox Bundle $($inputs.appVersion)" --raw-field "body=$notes"
+    if ($LASTEXITCODE -ne 0) { throw "Release creation failed with exit code $LASTEXITCODE" }
+    $release = ($created -join "`n") | ConvertFrom-Json
+    if ($release.draft -cne $true -or $release.id -le 0 -or $release.tag_name -cne $inputs.releaseTag -or $release.target_commitish -cne $inputs.recipeCommit) { throw 'Created draft identity differs from the fixed inputs' }
 }
 $releaseId = $release.id
 # Original input identity is uploaded first. A draft without that snapshot
@@ -104,7 +107,7 @@ foreach ($name in @('inputs.json', 'build-manifest.json', 'sources.zip', $names[
     if (-not $current.draft -or $current.tag_name -cne $inputs.releaseTag) { throw 'Release ceased to be the expected draft; refusing to overwrite assets' }
     Invoke-BundleNative 'gh' @('release', 'upload', $inputs.releaseTag, (Join-Path $ArtifactsDir $name), '--repo', $Repository, '--clobber')
 }
-$release = Get-BundleRelease $Repository $inputs.releaseTag
+$release = Get-BundleApi "repos/$Repository/releases/$releaseId"
 if (-not $release.draft -or $release.id -ne $releaseId -or @($release.assets).Count -ne $names.Count -or @($names | Where-Object { $_ -cnotin @($release.assets.name) }).Count) { throw 'Draft release asset set is not exact' }
 Assert-BundleReleaseInputs $Repository $release $inputs
 # GitHub may defer creating a draft's tag until publication.
@@ -119,7 +122,7 @@ try {
         Remove-Item -LiteralPath $path -Force
     }
     Invoke-BundleNative 'gh' @('release', 'edit', $inputs.releaseTag, '--repo', $Repository, '--draft=false')
-    $published = Get-BundleRelease $Repository $inputs.releaseTag
+    $published = Get-BundleApi "repos/$Repository/releases/$releaseId"
     if ($published.draft -or $published.id -ne $releaseId) { throw 'Release did not become public' }
     Assert-TagCommit -Required
     $installer = Join-Path $download $names[0]
