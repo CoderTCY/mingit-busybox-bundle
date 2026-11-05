@@ -379,6 +379,10 @@ end;
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 begin
   if CurUninstallStep = usUninstall then begin
+    { Resolve the persisted scope in the callback which performs the mutation;
+      do not depend on state initialized by an earlier uninstall phase. }
+    ResolveUninstallScope;
+    Log('Removing product PATH ownership in scope: ' + ScopeName);
     CheckUninstallTree(ExpandConstant('{app}'));
     RemoveProductPath;
   end;
@@ -387,5 +391,6 @@ begin
     if RegKeyExists(ScopeRoot, ProductKey) then
       if not RegDeleteKeyIncludingSubkeys(ScopeRoot, ProductKey) then
         RaiseException('Cannot remove MinGit BusyBox Bundle ownership registration.');
+    Log('Product ownership registration removed in scope: ' + ScopeName);
   end;
 end;
