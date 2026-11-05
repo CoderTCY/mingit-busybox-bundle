@@ -19,7 +19,7 @@ public static class BundleBrowserAssociation {
     $port = $listener.LocalEndpoint.Port
     $listener.Stop()
     $profile = Join-Path $Root 'browser-profile'
-    $state = @{ Port = $port; Profile = $profile; Registry = @(); Process = $null; ChoiceChecked = $false }
+    $state = @{ Port = $port; Profile = $profile; Registry = @(); Process = $null }
     try {
         $info = [Diagnostics.ProcessStartInfo]::new($edge)
         $info.UseShellExecute = $false
@@ -33,8 +33,8 @@ public static class BundleBrowserAssociation {
         Assert-Acceptance $ready 'Real browser did not expose its local inspection endpoint.'
 
         # Do not rewrite extension defaults or fabricate a UserChoice hash.
-        # The native chooser selects Edge; temporarily configure its actual
-        # ProgID command so that selection reaches this existing real profile.
+        # Temporarily configure Edge's actual ProgID command so the existing
+        # Windows default reaches this real browser's disposable profile.
         $commandPath = 'Software\Classes\MSEdgeHTM\shell\open\command'
         foreach ($path in @('Software\Classes\MSEdgeHTM', 'Software\Classes\MSEdgeHTM\shell', 'Software\Classes\MSEdgeHTM\shell\open', $commandPath)) {
             $prior = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey($path)
@@ -87,9 +87,9 @@ function Invoke-BrowserProtocol([string] $WebSocket, [string] $Method, [hashtabl
     $socket = [Net.WebSockets.ClientWebSocket]::new()
     $cancel = [Threading.CancellationTokenSource]::new(30000)
     try {
-        $socket.ConnectAsync([Uri]$WebSocket, $cancel.Token).GetAwaiter().GetResult()
+        $null = $socket.ConnectAsync([Uri]$WebSocket, $cancel.Token).GetAwaiter().GetResult()
         $request = [Text.Encoding]::UTF8.GetBytes((@{ id = 1; method = $Method; params = $Parameters } | ConvertTo-Json -Depth 12 -Compress))
-        $socket.SendAsync([ArraySegment[byte]]::new($request), [Net.WebSockets.WebSocketMessageType]::Text, $true, $cancel.Token).GetAwaiter().GetResult()
+        $null = $socket.SendAsync([ArraySegment[byte]]::new($request), [Net.WebSockets.WebSocketMessageType]::Text, $true, $cancel.Token).GetAwaiter().GetResult()
         do {
             $stream = [IO.MemoryStream]::new()
             try {
@@ -124,29 +124,7 @@ function Wait-BrowserPage($State, [string] $LocalPath, [string] $TargetId = '') 
 
 function Save-BrowserPageEvidence($State, [string] $LocalPath, [string] $OutputRoot, [string] $Name, [string] $TargetId = '') {
     [IO.Directory]::CreateDirectory($OutputRoot) | Out-Null
-    try {
-        if (-not $State.ChoiceChecked) {
-            $null = Invoke-AcceptanceProcess -File (Join-Path $env:SystemRoot 'System32/WindowsPowerShell/v1.0/powershell.exe') -Arguments @('-NoProfile', '-File', (Join-Path $PSScriptRoot 'select-default-browser.ps1'), '-OutputPath', (Join-Path $OutputRoot 'default-browser-choice.json')) -Directory $OutputRoot -TimeoutSeconds 30
-            $State.ChoiceChecked = $true
-        }
-        $target = Wait-BrowserPage $State $LocalPath $TargetId
-    }
-    catch {
-        $originalFailure = $_
-        $diagnostics = [ordered]@{ expectedPath = $LocalPath; targets = @(); documents = @(); captureFailure = $null }
-        try {
-            $diagnostics.targets = Invoke-RestMethod "http://127.0.0.1:$($State.Port)/json/list" -TimeoutSec 5
-            foreach ($pageTarget in ($diagnostics.targets | Where-Object type -EQ 'page')) {
-                $observation = Invoke-BrowserProtocol $pageTarget.webSocketDebuggerUrl 'Runtime.evaluate' @{ expression = '({url:location.href,title:document.title,ready:document.readyState,visible:document.visibilityState})'; returnByValue = $true }
-                $diagnostics.documents += @{ targetId = $pageTarget.id; observation = $observation }
-            }
-        } catch { $diagnostics.captureFailure = $_.Exception.ToString() }
-        Write-Utf8 (Join-Path $OutputRoot 'browser-failure.json') ($diagnostics | ConvertTo-Json -Depth 12)
-        try {
-            $null = Invoke-AcceptanceProcess -File (Join-Path $env:SystemRoot 'System32/WindowsPowerShell/v1.0/powershell.exe') -Arguments @('-NoProfile', '-File', (Join-Path $PSScriptRoot 'capture-browser-diagnostics.ps1'), '-OutputRoot', $OutputRoot) -Directory $OutputRoot -TimeoutSeconds 60
-        } catch { Write-Warning "Native browser diagnostic capture failed: $($_.Exception)" }
-        throw $originalFailure
-    }
+    $target = Wait-BrowserPage $State $LocalPath $TargetId
     $expression = @'
 JSON.stringify({url:location.href,title:document.title,text:document.body.innerText,
   visible:document.visibilityState, width:innerWidth,height:innerHeight,
