@@ -16,6 +16,10 @@ gh workflow run release.yml --repo CoderTCY/mingit-busybox-bundle -f git_tag=v2.
 
 工作流调用同一组 `scripts/resolve-inputs.ps1`、`scripts/build.ps1` 和 `tests/invoke-verify.ps1` 入口。同一次 GitHub run 重跑复用原始输入 artifact；同一已发布身份成功跳过，不覆盖公开资产。
 
+独立的 `keepalive.yml` 每周日 02:41 UTC（北京时间 10:41）检查默认分支最新提交的 committer 时间；未满 52 天不做改动，达到阈值时由 `github-actions[bot]` 创建一个不改文件内容的空提交，再正常推送到默认分支。仅允许默认分支执行，不强推；手动运行也遵守同一阈值。
+
+保活空提交会改变 `recipeCommit`，因此后续每日发布检查会将其视为新的构建身份，仍须通过完整构建和验收。此机制用于降低公开仓库因 60 天无活动而停用定时 workflow 的风险，不保证 GitHub 调度准时；已经停用的 workflow 仍需手动重新启用。
+
 失败续跑应选择保留原 artifact 的失败 job 重跑。GitHub 的 `Re-run all jobs` 会删除上一轮 artifacts；原输入快照缺失或过期时，本项目明确失败而不是重新读取 latest，须开启新的手动运行。
 
 SDK 使用官方 `setup-git-for-windows-sdk` 锁定提交的 `full` flavor，使用 `MSYSTEM=UCRT64`、`MINGW_PREFIX=/ucrt64`。编译目录不得含空格；最终安装目录支持空格与中文。所有产物在被忽略的 `build/work/`、`build/payload/`、`build/test-results/` 和 `dist/`，不得提交二进制、缓存或凭据。

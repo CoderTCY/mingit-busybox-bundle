@@ -1,0 +1,50 @@
+name: Keep scheduled workflows active
+
+on:
+  schedule:
+    - cron: '41 2 * * 0'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: keep-scheduled-workflows-active
+  cancel-in-progress: false
+
+jobs:
+  keepalive:
+    if: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - name: Check out the current default branch
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 1
+          # This trusted maintenance job needs credentials for its ordinary push.
+          persist-credentials: true
+      - name: Create a keepalive commit after 52 days without commits
+        shell: bash
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+
+          readonly threshold_seconds=$((52 * 86400))
+          last_commit_epoch="$(git log -1 --format=%ct)"
+          current_epoch="$(date -u +%s)"
+          readonly elapsed_seconds=$((current_epoch - last_commit_epoch))
+
+          if [ "$elapsed_seconds" -lt "$threshold_seconds" ]; then
+            echo "Latest commit is $((elapsed_seconds / 86400)) day(s) old; no keepalive commit is due."
+            exit 0
+          fi
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit --allow-empty -m 'chore: keep scheduled workflows active'
+          git push origin "HEAD:refs/heads/$DEFAULT_BRANCH"
